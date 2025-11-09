@@ -28,9 +28,6 @@ const allowedOrigins = Array.from(new Set([
     .filter(Boolean),
 ]));
 
-// If you only need your Vercel site + local dev, set this env exactly:
-// CORS_ORIGIN=https://election-front-beta.vercel.app,http://localhost:5173
-
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true); // allow curl/postman
