@@ -70,45 +70,57 @@ router.get('/search', auth, requireAuth, async (req, res) => {
 });
 
 function normalizeMobileNumber(value) {
-  if (!value) return '';
+  if (value === undefined || value === null) return null;
   const digits = String(value).replace(/[^\d]/g, '');
   if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
   if (digits.length === 11 && digits.startsWith('0')) return digits.slice(1);
-  return digits.length === 10 ? digits : '';
+  return digits.length === 10 ? digits : null;
 }
 
-function buildMobileUpdate(mobile) {
-  const normalized = normalizeMobileNumber(mobile);
-  if (!normalized) return null;
-  const set = {
-    mobile: normalized,
-    Mobile: normalized,
-    phone: normalized,
-    Phone: normalized,
-    contact: normalized,
-    Contact: normalized,
-    '__raw.Mobile': normalized,
-    '__raw.Mobile No': normalized,
-    '__raw.मोबाइल': normalized,
-    '__raw.Contact': normalized,
+function buildMobileUpdate(normalizedMobile) {
+  if (!normalizedMobile) return null;
+  return {
+    mobile: normalizedMobile,
+    Mobile: normalizedMobile,
+    phone: normalizedMobile,
+    Phone: normalizedMobile,
+    contact: normalizedMobile,
+    Contact: normalizedMobile,
+    '__raw.Mobile': normalizedMobile,
+    '__raw.Mobile No': normalizedMobile,
+    '__raw.मोबाइल': normalizedMobile,
+    '__raw.Contact': normalizedMobile,
   };
-  return set;
 }
 
-async function updateMobileByQuery(query, mobile, res) {
-  const set = buildMobileUpdate(mobile);
-  if (!set) {
-    res.status(400).json({ error: 'Invalid mobile number' });
-    return;
+function pickMobileCandidate(body = {}) {
+  const candidates = ['mobile', 'Mobile', 'phone', 'Phone', 'contact', 'Contact'];
+  for (const key of candidates) {
+    if (body[key] !== undefined && body[key] !== null) {
+      return body[key];
+    }
+  }
+  return null;
+}
+
+async function applyMobileUpdate(query, body) {
+  const candidate = pickMobileCandidate(body);
+  if (candidate === null) {
+    return { status: 400, error: 'Mobile number is required' };
   }
 
+  const normalized = normalizeMobileNumber(candidate);
+  if (!normalized) {
+    return { status: 400, error: 'Invalid mobile number' };
+  }
+
+  const set = buildMobileUpdate(normalized);
   const updated = await Voter.findOneAndUpdate(query, { $set: set }, { new: true, lean: true });
   if (!updated) {
-    res.status(404).json({ error: 'Voter not found' });
-    return;
+    return { status: 404, error: 'Voter not found' };
   }
 
-  res.json(updated);
+  return { status: 200, data: updated };
 }
 
 router.patch('/by-epic/:epic', auth, requireAuth, async (req, res) => {
@@ -118,7 +130,20 @@ router.patch('/by-epic/:epic', auth, requireAuth, async (req, res) => {
       res.status(400).json({ error: 'EPIC is required' });
       return;
     }
-    await updateMobileByQuery({ voter_id: epic }, req.body?.mobile ?? req.body?.Mobile ?? req.body?.phone ?? req.body?.Phone, res);
+    const query = {
+      $or: [
+        { voter_id: epic },
+        { EPIC: epic },
+        { '__raw.EPIC': epic },
+        { '__raw.कार्ड नं': epic },
+      ],
+    };
+    const result = await applyMobileUpdate(query, req.body);
+    if (result.error) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.json(result.data);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Server error' });
@@ -128,7 +153,12 @@ router.patch('/by-epic/:epic', auth, requireAuth, async (req, res) => {
 router.patch('/:id', auth, requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    await updateMobileByQuery({ _id: id }, req.body?.mobile ?? req.body?.Mobile ?? req.body?.phone ?? req.body?.Phone, res);
+    const result = await applyMobileUpdate({ _id: id }, req.body);
+    if (result.error) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.json(result.data);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Server error' });
