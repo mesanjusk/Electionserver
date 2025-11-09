@@ -58,6 +58,14 @@ app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/voters', voterRoutes);
 
+const frontendRoutes = ['/login'];
+frontendRoutes.forEach((route) => {
+  app.get(route, (req, res) => res.redirect(302, '/'));
+});
+
+// Avoid noisy favicon lookups in the logs.
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 const PORT = process.env.PORT || 4000;
 
 async function ensureDefaultAdmin() {
