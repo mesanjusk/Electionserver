@@ -162,6 +162,52 @@ async function applyMobileUpdate(query, body) {
   return { status: 200, data: updated };
 }
 
+/**
+ * GET /api/voters/all
+ * Loads ALL voter records (no pagination). Optional q= for server-side filtering.
+ */
+router.get('/all', auth, requireAuth, async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+
+    let projection = undefined;
+    if (req.query.fields) {
+      const fields = String(req.query.fields).split(',').map(s => s.trim()).filter(Boolean);
+      if (fields.length > 0) {
+        projection = {};
+        for (const f of fields) projection[f] = 1;
+      }
+    }
+
+    const findQuery = {};
+    if (req.query.filters && typeof req.query.filters === 'object') {
+      for (const [k, v] of Object.entries(req.query.filters)) {
+        if (v !== undefined && v !== '') findQuery[k] = v;
+      }
+    }
+
+    if (q) {
+      const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rx = new RegExp(esc(q), 'i');
+      findQuery['$or'] = [
+        { name: rx }, { Name: rx },
+        { voter_id: rx }, { EPIC: rx },
+        { mobile: rx }, { Mobile: rx },
+        { phone: rx },  { Phone: rx },
+        { Contact: rx }, { Booth: rx },
+        { '__raw.Name': rx }, { '__raw.नाव': rx }, { '__raw.voter_id': rx },
+      ];
+    }
+
+    const docs = await Voter.find(findQuery, projection).lean().exec();
+    res.json({ total: docs.length, results: docs });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+
 router.patch('/by-epic/:epic', auth, requireAuth, async (req, res) => {
   try {
     const epic = req.params.epic;
