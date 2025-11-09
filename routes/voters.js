@@ -69,4 +69,70 @@ router.get('/search', auth, requireAuth, async (req, res) => {
   }
 });
 
+function normalizeMobileNumber(value) {
+  if (!value) return '';
+  const digits = String(value).replace(/[^\d]/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
+  if (digits.length === 11 && digits.startsWith('0')) return digits.slice(1);
+  return digits.length === 10 ? digits : '';
+}
+
+function buildMobileUpdate(mobile) {
+  const normalized = normalizeMobileNumber(mobile);
+  if (!normalized) return null;
+  const set = {
+    mobile: normalized,
+    Mobile: normalized,
+    phone: normalized,
+    Phone: normalized,
+    contact: normalized,
+    Contact: normalized,
+    '__raw.Mobile': normalized,
+    '__raw.Mobile No': normalized,
+    '__raw.मोबाइल': normalized,
+    '__raw.Contact': normalized,
+  };
+  return set;
+}
+
+async function updateMobileByQuery(query, mobile, res) {
+  const set = buildMobileUpdate(mobile);
+  if (!set) {
+    res.status(400).json({ error: 'Invalid mobile number' });
+    return;
+  }
+
+  const updated = await Voter.findOneAndUpdate(query, { $set: set }, { new: true, lean: true });
+  if (!updated) {
+    res.status(404).json({ error: 'Voter not found' });
+    return;
+  }
+
+  res.json(updated);
+}
+
+router.patch('/by-epic/:epic', auth, requireAuth, async (req, res) => {
+  try {
+    const epic = req.params.epic;
+    if (!epic) {
+      res.status(400).json({ error: 'EPIC is required' });
+      return;
+    }
+    await updateMobileByQuery({ voter_id: epic }, req.body?.mobile ?? req.body?.Mobile ?? req.body?.phone ?? req.body?.Phone, res);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/:id', auth, requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await updateMobileByQuery({ _id: id }, req.body?.mobile ?? req.body?.Mobile ?? req.body?.phone ?? req.body?.Phone, res);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 export default router;
