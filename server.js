@@ -14,10 +14,19 @@ dotenv.config();
 const app = express();
 
 // ---- CORS (before anything else that handles requests) ----
-const allowedOrigins = (process.env.CORS_ORIGIN || '')
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean);
+const defaultAllowedOrigins = [
+  'https://election-front-beta.vercel.app',
+  'http://localhost:5173',
+  'https://vote.sanjusk.in',
+];
+
+const allowedOrigins = Array.from(new Set([
+  ...defaultAllowedOrigins,
+  ...(process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean),
+]));
 
 // If you only need your Vercel site + local dev, set this env exactly:
 // CORS_ORIGIN=https://election-front-beta.vercel.app,http://localhost:5173
