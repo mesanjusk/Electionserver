@@ -8,11 +8,11 @@ const router = Router();
 
 /**
  * GET /api/voters/search
- * q= string           (text / regex search on name, voter_id, text index)
- * page= number>=1     (default 1)
- * limit= number<=100  (default 20)
- * filters[field]=value   generic equals filter for any field (e.g., filters[Booth]=12)
- * fields=name,voter_id,Booth   optional CSV for projection
+ * q= string                 (regex search on name, voter_id, phones, plus __raw fallbacks)
+ * page= number>=1           (default 1)
+ * limit= number<=100        (default 20)
+ * filters[field]=value      (generic equals filter for any field)
+ * fields=name,voter_id,...  (optional CSV for projection)
  */
 router.get('/search', auth, requireAuth, async (req, res) => {
   try {
@@ -21,38 +21,77 @@ router.get('/search', auth, requireAuth, async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 100);
     const skip = (page - 1) * limit;
 
-    // Generic filters: filters[field]=value
+    // ---------- Filters ----------
+    // Support both: filters={ field: val } and flat 'filters[field]'=val
     const filters = {};
-    // URLSearchParams flattens; but Express gives object: { 'filters[field]': 'value' } OR filters: { field: value }
     if (req.query.filters && typeof req.query.filters === 'object') {
       for (const [k, v] of Object.entries(req.query.filters)) {
         if (v !== undefined && v !== '') filters[k] = v;
       }
     }
-
-    // Base query with filters
-    const query = { ...filters };
-
-    if (q) {
-      const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      Object.assign(query, {
-        $or: [
-          { name: regex },
-          { voter_id: regex },
-          { $text: { $search: q } },
-        ],
-      });
+    // Parse flattened query params like 'filters[Booth]=12'
+    for (const [k, v] of Object.entries(req.query)) {
+      const m = /^filters\[(.+?)\]$/.exec(k);
+      if (m && v !== undefined && v !== '') {
+        filters[m[1]] = v;
+      }
     }
 
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // ---------- Base query ----------
+    let query = { ...filters };
+
+    if (q) {
+      const rx = new RegExp(esc(q), 'i');
+
+      // Expand OR terms to include canonical + raw fields + phone variants
+      const orSet = [
+        // Canonical fields
+        { name: rx },
+        { voter_id: rx },
+
+        // Phone fields (search by number if typed)
+        { mobile: rx },
+        { Mobile: rx },
+        { phone: rx },
+        { Phone: rx },
+        { contact: rx },
+        { Contact: rx },
+
+        // Common raw fields (names/epic/phone appear here in many imports)
+        { '__raw.Name': rx },
+        { '__raw.नाव': rx },
+        { "__raw['नाव + मोबा/ ईमेल नं.']": rx },
+        { '__raw.EPIC': rx },
+        { '__raw.कार्ड नं': rx },
+        { '__raw.Mobile': rx },
+        { '__raw.Mobile No': rx },
+        { '__raw.मोबाइल': rx },
+        { '__raw.Contact': rx },
+      ];
+
+      query = { ...query, $or: orSet };
+    }
+
+    // ---------- Projection ----------
     const projection = {};
     if (req.query.fields) {
-      const fields = String(req.query.fields).split(',').map(s => s.trim()).filter(Boolean);
+      const fields = String(req.query.fields)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
       for (const f of fields) projection[f] = 1;
-      projection.__raw = 1; // always keep raw for UI details
+      // Always keep raw for UI details
+      projection.__raw = 1;
     }
 
     const [rows, total] = await Promise.all([
-      Voter.find(query).select(Object.keys(projection).length ? projection : '-__v').skip(skip).limit(limit).lean(),
+      Voter.find(query)
+        .select(Object.keys(projection).length ? projection : '-__v')
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       Voter.countDocuments(query),
     ]);
 
