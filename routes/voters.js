@@ -6,107 +6,25 @@ import { requireAuth } from '../middleware/roles.js';
 
 const router = Router();
 
-/**
- * GET /api/voters/search
- * q= string                 (regex search on name, voter_id, phones, plus __raw fallbacks)
- * page= number>=1           (default 1)
- * limit= number<=100        (default 20)
- * filters[field]=value      (generic equals filter for any field)
- * fields=name,voter_id,...  (optional CSV for projection)
- */
-router.get('/search', auth, requireAuth, async (req, res) => {
-  try {
-    const q = (req.query.q || '').trim();
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 100);
-    const skip = (page - 1) * limit;
+/* ----------------------------- helpers ----------------------------- */
+const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-    // ---------- Filters ----------
-    // Support both: filters={ field: val } and flat 'filters[field]'=val
-    const filters = {};
-    if (req.query.filters && typeof req.query.filters === 'object') {
-      for (const [k, v] of Object.entries(req.query.filters)) {
-        if (v !== undefined && v !== '') filters[k] = v;
-      }
+function parseFilters(qs) {
+  // supports both ?filters[Booth]=12 and ?filters={"Booth":"12"}
+  const filters = {};
+  // object style
+  if (qs.filters && typeof qs.filters === 'object') {
+    for (const [k, v] of Object.entries(qs.filters)) {
+      if (v !== undefined && v !== '') filters[k] = v;
     }
-    // Parse flattened query params like 'filters[Booth]=12'
-    for (const [k, v] of Object.entries(req.query)) {
-      const m = /^filters\[(.+?)\]$/.exec(k);
-      if (m && v !== undefined && v !== '') {
-        filters[m[1]] = v;
-      }
-    }
-
-    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-    // ---------- Base query ----------
-    let query = { ...filters };
-
-    if (q) {
-      const rx = new RegExp(esc(q), 'i');
-
-      // Expand OR terms to include canonical + raw fields + phone variants
-      const orSet = [
-        // Canonical fields
-        { name: rx },
-        { voter_id: rx },
-
-        // Phone fields (search by number if typed)
-        { mobile: rx },
-        { Mobile: rx },
-        { phone: rx },
-        { Phone: rx },
-        { contact: rx },
-        { Contact: rx },
-
-        // Common raw fields (names/epic/phone appear here in many imports)
-        { '__raw.Name': rx },
-        { '__raw.नाव': rx },
-        { "__raw['नाव + मोबा/ ईमेल नं.']": rx },
-        { '__raw.EPIC': rx },
-        { '__raw.कार्ड नं': rx },
-        { '__raw.Mobile': rx },
-        { '__raw.Mobile No': rx },
-        { '__raw.मोबाइल': rx },
-        { '__raw.Contact': rx },
-      ];
-
-      query = { ...query, $or: orSet };
-    }
-
-    // ---------- Projection ----------
-    const projection = {};
-    if (req.query.fields) {
-      const fields = String(req.query.fields)
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      for (const f of fields) projection[f] = 1;
-      // Always keep raw for UI details
-      projection.__raw = 1;
-    }
-
-    const [rows, total] = await Promise.all([
-      Voter.find(query)
-        .select(Object.keys(projection).length ? projection : '-__v')
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Voter.countDocuments(query),
-    ]);
-
-    res.json({
-      results: rows,
-      page,
-      limit,
-      total,
-      pages: Math.max(1, Math.ceil(total / limit)),
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Server error' });
   }
-});
+  // flattened style
+  for (const [k, v] of Object.entries(qs)) {
+    const m = /^filters\[(.+?)\]$/.exec(k);
+    if (m && v !== undefined && v !== '') filters[m[1]] = v;
+  }
+  return filters;
+}
 
 function normalizeMobileNumber(value) {
   if (value === undefined || value === null) return null;
@@ -114,6 +32,18 @@ function normalizeMobileNumber(value) {
   if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
   if (digits.length === 11 && digits.startsWith('0')) return digits.slice(1);
   return digits.length === 10 ? digits : null;
+}
+
+function pickMobileCandidate(body = {}) {
+  const candidates = ['mobile', 'Mobile', 'phone', 'Phone', 'contact', 'Contact'];
+  for (const key of candidates) {
+    if (body[key] !== undefined && body[key] !== null && String(body[key]).trim() !== '') {
+      return body[key];
+    }
+  }
+  // also allow { value: "..." } from minimal UIs
+  if (body.value !== undefined && body.value !== null) return body.value;
+  return null;
 }
 
 function buildMobileUpdate(normalizedMobile) {
@@ -125,6 +55,7 @@ function buildMobileUpdate(normalizedMobile) {
     Phone: normalizedMobile,
     contact: normalizedMobile,
     Contact: normalizedMobile,
+    // common raw variants we’ve seen in imports
     '__raw.Mobile': normalizedMobile,
     '__raw.Mobile No': normalizedMobile,
     '__raw.मोबाइल': normalizedMobile,
@@ -132,90 +63,146 @@ function buildMobileUpdate(normalizedMobile) {
   };
 }
 
-function pickMobileCandidate(body = {}) {
-  const candidates = ['mobile', 'Mobile', 'phone', 'Phone', 'contact', 'Contact'];
-  for (const key of candidates) {
-    if (body[key] !== undefined && body[key] !== null) {
-      return body[key];
-    }
-  }
-  return null;
+function safeProjectionFromCSV(csv) {
+  if (!csv) return null;
+  const out = {};
+  String(csv)
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .forEach(k => { out[k] = 1; });
+  // we nearly always want raw for UI labels; include unless explicitly excluded
+  out.__raw = 1;
+  return out;
 }
 
-async function applyMobileUpdate(query, body) {
+function buildSearchQuery(q, filters) {
+  const query = { ...filters };
+  if (!q) return query;
+
+  const rx = new RegExp(esc(q), 'i');
+  query.$or = [
+    // canonical
+    { name: rx }, { Name: rx },
+    { voter_id: rx }, { EPIC: rx },
+    // phones
+    { mobile: rx }, { Mobile: rx },
+    { phone: rx },  { Phone: rx },
+    { contact: rx }, { Contact: rx },
+    // raw fallbacks (NOTE: do NOT use "__raw['…']" form; dot-path is correct)
+    { '__raw.Name': rx },
+    { '__raw.नाव': rx },
+    { '__raw.नाव + मोबा/ ईमेल नं.': rx },
+    { '__raw.EPIC': rx },
+    { '__raw.voter_id': rx },
+    { '__raw.कार्ड नं': rx },
+    { '__raw.Mobile': rx },
+    { '__raw.Mobile No': rx },
+    { '__raw.मोबाइल': rx },
+    { '__raw.Contact': rx },
+    { Booth: rx }, { '__raw.Booth': rx },
+  ];
+  return query;
+}
+
+async function applyMobileUpdate(matchQuery, body) {
   const candidate = pickMobileCandidate(body);
-  if (candidate === null) {
-    return { status: 400, error: 'Mobile number is required' };
-  }
+  if (candidate === null) return { status: 400, error: 'Mobile number is required' };
 
   const normalized = normalizeMobileNumber(candidate);
-  if (!normalized) {
-    return { status: 400, error: 'Invalid mobile number' };
-  }
+  if (!normalized) return { status: 400, error: 'Invalid mobile number' };
 
-  const set = buildMobileUpdate(normalized);
-  const updated = await Voter.findOneAndUpdate(query, { $set: set }, { new: true, lean: true });
-  if (!updated) {
-    return { status: 404, error: 'Voter not found' };
-  }
+  const $set = {
+    ...buildMobileUpdate(normalized),
+    updatedAt: new Date(),
+  };
 
-  return { status: 200, data: updated };
+  const doc = await Voter.findOneAndUpdate(matchQuery, { $set }, { new: true, lean: true });
+  if (!doc) return { status: 404, error: 'Voter not found' };
+  return { status: 200, data: doc };
 }
 
+/* ------------------------------- routes ------------------------------- */
+
 /**
- * GET /api/voters/all
- * Loads ALL voter records (no pagination). Optional q= for server-side filtering.
+ * GET /api/voters/search
+ * q= string                 (regex search on name, voter_id, phones, plus __raw fallbacks)
+ * page= number>=1           (default 1)
+ * limit= number<=100        (default 20)
+ * filters[field]=value      (generic equals filter for any field)
+ * fields=name,voter_id,...  (optional CSV for projection)
  */
-router.get('/all', auth, requireAuth, async (req, res) => {
+router.get('/search', auth, requireAuth, async (req, res) => {
   try {
-    const q = (req.query.q || '').trim();
+    const q = String(req.query.q || '').trim();
+    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 100);
+    const skip = (page - 1) * limit;
 
-    let projection = undefined;
-    if (req.query.fields) {
-      const fields = String(req.query.fields).split(',').map(s => s.trim()).filter(Boolean);
-      if (fields.length > 0) {
-        projection = {};
-        for (const f of fields) projection[f] = 1;
-      }
-    }
+    const filters = parseFilters(req.query);
+    const findQuery = buildSearchQuery(q, filters);
 
-    const findQuery = {};
-    if (req.query.filters && typeof req.query.filters === 'object') {
-      for (const [k, v] of Object.entries(req.query.filters)) {
-        if (v !== undefined && v !== '') findQuery[k] = v;
-      }
-    }
+    const projection = safeProjectionFromCSV(req.query.fields);
 
-    if (q) {
-      const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const rx = new RegExp(esc(q), 'i');
-      findQuery['$or'] = [
-        { name: rx }, { Name: rx },
-        { voter_id: rx }, { EPIC: rx },
-        { mobile: rx }, { Mobile: rx },
-        { phone: rx },  { Phone: rx },
-        { Contact: rx }, { Booth: rx },
-        { '__raw.Name': rx }, { '__raw.नाव': rx }, { '__raw.voter_id': rx },
-      ];
-    }
+    const [results, total] = await Promise.all([
+      Voter.find(findQuery)
+        .select(projection ? projection : '-__v')
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Voter.countDocuments(findQuery),
+    ]);
 
-    const docs = await Voter.find(findQuery, projection).lean().exec();
-    res.json({ total: docs.length, results: docs });
+    res.json({
+      results,
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    });
   } catch (e) {
-    console.error(e);
+    console.error('Search error', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
+/**
+ * GET /api/voters/all
+ * Loads ALL voter records (no pagination). Optional q= and filters=.
+ * WARNING: for very large datasets, prefer /search with paging.
+ */
+router.get('/all', auth, requireAuth, async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const filters = parseFilters(req.query);
+    const projection = safeProjectionFromCSV(req.query.fields) || undefined;
 
+    const findQuery = buildSearchQuery(q, filters);
+
+    // Optional hard cap to prevent accidental OOM in cloud; lift if you need
+    const HARD_CAP = parseInt(process.env.VOTERS_ALL_HARDCAP || '0', 10); // 0 = no cap
+    let cursor = Voter.find(findQuery, projection).lean();
+    if (HARD_CAP > 0) cursor = cursor.limit(HARD_CAP);
+
+    const docs = await cursor.exec();
+    res.json({ total: docs.length, results: docs });
+  } catch (e) {
+    console.error('All error', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/**
+ * PATCH /api/voters/by-epic/:epic
+ * Body can contain any of: { mobile | Mobile | phone | Phone | contact | Contact | value }
+ */
 router.patch('/by-epic/:epic', auth, requireAuth, async (req, res) => {
   try {
-    const epic = req.params.epic;
-    if (!epic) {
-      res.status(400).json({ error: 'EPIC is required' });
-      return;
-    }
-    const query = {
+    const epic = String(req.params.epic || '').trim();
+    if (!epic) return res.status(400).json({ error: 'EPIC is required' });
+
+    // EPIC variants in different imports
+    const match = {
       $or: [
         { voter_id: epic },
         { EPIC: epic },
@@ -223,29 +210,28 @@ router.patch('/by-epic/:epic', auth, requireAuth, async (req, res) => {
         { '__raw.कार्ड नं': epic },
       ],
     };
-    const result = await applyMobileUpdate(query, req.body);
-    if (result.error) {
-      res.status(result.status).json({ error: result.error });
-      return;
-    }
+
+    const result = await applyMobileUpdate(match, req.body);
+    if (result.error) return res.status(result.status).json({ error: result.error });
     res.json(result.data);
   } catch (e) {
-    console.error(e);
+    console.error('by-epic patch error', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
+/**
+ * PATCH /api/voters/:id
+ * Body can contain any of: { mobile | Mobile | phone | Phone | contact | Contact | value }
+ */
 router.patch('/:id', auth, requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await applyMobileUpdate({ _id: id }, req.body);
-    if (result.error) {
-      res.status(result.status).json({ error: result.error });
-      return;
-    }
+    if (result.error) return res.status(result.status).json({ error: result.error });
     res.json(result.data);
   } catch (e) {
-    console.error(e);
+    console.error('id patch error', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
