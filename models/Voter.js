@@ -1,9 +1,10 @@
+// server/models/Voter.js
 import mongoose from 'mongoose';
 
 const VoterSchema = new mongoose.Schema(
   {
     name: { type: String, index: true },
-    voter_id: String,             // remove inline index
+    voter_id: String,   // avoid duplicate index warning by removing inline index
     mobile: String,
     booth: String,
     part: String,
@@ -13,7 +14,6 @@ const VoterSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Indexes
 VoterSchema.index({ name: 'text' });
 VoterSchema.index({ voter_id: 1 });
 
