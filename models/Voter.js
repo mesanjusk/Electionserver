@@ -1,11 +1,20 @@
 import mongoose from 'mongoose';
 
-const voterSchema = new mongoose.Schema({
-  __raw: { type: Object, default: {} },
-  name: { type: String, index: true },
-  voter_id: { type: String, index: true }
-}, { strict: false, timestamps: true });
+const VoterSchema = new mongoose.Schema(
+  {
+    name: { type: String, index: true },
+    voter_id: String,             // remove inline index
+    mobile: String,
+    booth: String,
+    part: String,
+    serial: String,
+    __raw: { type: mongoose.Schema.Types.Mixed },
+  },
+  { timestamps: true }
+);
 
-voterSchema.index({ name: 'text' });
+// Indexes
+VoterSchema.index({ name: 'text' });
+VoterSchema.index({ voter_id: 1 });
 
-export default mongoose.model('Voter', voterSchema);
+export default mongoose.model('Voter', VoterSchema);
