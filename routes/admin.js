@@ -12,15 +12,19 @@ function serializeUser(user) {
   if (!user) return null;
   const plain = typeof user.toObject === 'function' ? user.toObject() : user;
   const rawId = plain._id || plain.id || null;
+  const id = rawId ? String(rawId) : undefined;
+  const allowed = Array.isArray(plain.allowedDatabaseIds)
+    ? plain.allowedDatabaseIds.filter(Boolean).map(v => String(v))
+    : [];
+
   return {
-    id: rawId ? String(rawId) : undefined,
-    _id: plain._id,
+    id,
+    _id: id,
     username: plain.username || '',
     email: plain.email || null,
     role: plain.role || 'user',
-    allowedDatabaseIds: Array.isArray(plain.allowedDatabaseIds)
-      ? plain.allowedDatabaseIds
-      : [],
+    allowedDatabaseIds: allowed,
+    databaseIds: allowed,
     createdAt: plain.createdAt || null,
     updatedAt: plain.updatedAt || null,
   };
