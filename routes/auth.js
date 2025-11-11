@@ -46,7 +46,7 @@ router.post('/login', async (req, res) => {
       queries.push({ username: usernameCandidate }, { email: usernameCandidate });
     }
     if (emailCandidate) {
-      queries.push({ email: emailCandidate });
+      queries.push({ email: emailCandidate }, { username: emailCandidate });
     }
     // de-duplicate
     const seen = new Set();
@@ -67,8 +67,17 @@ router.post('/login', async (req, res) => {
     if (!ok) return res.status(400).json({ error: 'Invalid credentials' });
 
     // Optional role gate (if client sends userType)
-    if (userType && userType !== user.role) {
-      return res.status(403).json({ error: 'Role mismatch' });
+    if (userType) {
+      const normalizedType = String(userType).toLowerCase();
+      let expectedRoles;
+      if (normalizedType === 'volunteer') {
+        expectedRoles = new Set(['user', 'operator']);
+      } else if (normalizedType) {
+        expectedRoles = new Set([normalizedType]);
+      }
+      if (expectedRoles && !expectedRoles.has(user.role)) {
+        return res.status(403).json({ error: 'Role mismatch' });
+      }
     }
 
     // Device binding for candidates (first login binds)

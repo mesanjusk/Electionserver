@@ -70,8 +70,10 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 4 characters long.' });
     }
 
+    const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : 'user';
+    const roleAlias = normalizedRole === 'volunteer' ? 'user' : normalizedRole;
     const allowedRoles = ['admin', 'operator', 'candidate', 'user'];
-    if (!allowedRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+    if (!allowedRoles.includes(roleAlias)) return res.status(400).json({ error: 'Invalid role' });
 
     const normalizedEmail =
       typeof email === 'string' && email.trim() !== '' ? email.trim() : null;
@@ -107,7 +109,7 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
       username: normalizedUsername,
       email: normalizedEmail || undefined,
       passwordHash,
-      role,
+      role: roleAlias,
       allowedDatabaseIds: finalAllowed,
     });
 
@@ -141,16 +143,18 @@ router.patch('/users/:id/role', auth, requireRole('admin'), async (req, res) => 
   try {
     const { id } = req.params;
     const { role } = req.body || {};
+    const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : '';
+    const roleAlias = normalizedRole === 'volunteer' ? 'user' : normalizedRole;
     const allowedRoles = ['admin', 'operator', 'candidate', 'user'];
-    if (!allowedRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+    if (!allowedRoles.includes(roleAlias)) return res.status(400).json({ error: 'Invalid role' });
 
-    if (String(req.user?.id) === String(id) && req.user.role !== role) {
+    if (String(req.user?.id) === String(id) && req.user.role !== roleAlias) {
       return res.status(400).json({ error: 'You cannot change your own role' });
     }
 
     const user = await User.findByIdAndUpdate(
       id,
-      { role },
+      { role: roleAlias },
       { new: true, projection: 'username email role allowedDatabaseIds' }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -219,10 +223,10 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
     const { id } = req.params;
     let { role, databaseIds, allowedDatabaseIds } = req.body || {};
 
-    // map 'volunteer' (old UI) -> 'operator'
+    // map 'volunteer' (old UI) -> 'user'
     if (typeof role === 'string') {
       const r = role.toLowerCase();
-      role = r === 'volunteer' ? 'operator' : r;
+      role = r === 'volunteer' ? 'user' : r;
     }
 
     const allowedRoles = new Set(['admin', 'operator', 'candidate', 'user']);
