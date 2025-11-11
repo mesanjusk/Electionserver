@@ -16,11 +16,8 @@ function serializeUser(user) {
     id: rawId ? String(rawId) : undefined,
     _id: plain._id,
     username: plain.username || '',
-    email: plain.email || null,
     role: plain.role || 'user',
-    allowedDatabaseIds: Array.isArray(plain.allowedDatabaseIds)
-      ? plain.allowedDatabaseIds
-      : [],
+    allowedDatabaseIds: Array.isArray(plain.allowedDatabaseIds) ? plain.allowedDatabaseIds : [],
     createdAt: plain.createdAt || null,
     updatedAt: plain.updatedAt || null,
   };
@@ -33,18 +30,16 @@ router.get('/databases', auth, requireRole('admin'), async (_req, res) => {
     res.json({ databases });
   } catch (e) {
     console.error('ADMIN_DATABASES_ERROR', e);
-    res.status(500).json({ error: 'Unable to load voter databases.' });
+    // return an empty array instead of 500 to avoid blocking the UI
+    res.json({ databases: [] });
   }
 });
 
 /** List users (lightweight) */
 router.get('/users', auth, requireRole('admin'), async (_req, res) => {
   try {
-    const users = await User.find(
-      {},
-      'username email role allowedDatabaseIds createdAt updatedAt'
-    ).sort({ createdAt: -1 });
-
+    const users = await User.find({}, 'username role allowedDatabaseIds createdAt updatedAt')
+      .sort({ createdAt: -1 });
     res.json({ users: users.map(serializeUser) });
   } catch (e) {
     console.error('ADMIN_LIST_USERS_ERROR', e);
@@ -52,7 +47,7 @@ router.get('/users', auth, requireRole('admin'), async (_req, res) => {
   }
 });
 
-/** Create user (username required; email optional; role; allowed DBs) */
+/** Create user (username required; role; allowed DBs); no email anywhere */
 router.post('/users', auth, requireRole('admin'), async (req, res) => {
   try {
     const {
@@ -60,12 +55,12 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
       password,
       role = 'user',
       allowedDatabaseIds = [],
-      email,
     } = req.body || {};
 
     const normalizedUsername = typeof username === 'string' ? username.trim() : '';
-    if (!normalizedUsername) return res.status(400).json({ error: 'Username is required.' });
-
+    if (!normalizedUsername) {
+      return res.status(400).json({ error: 'Username is required.' });
+    }
     if (!password || typeof password !== 'string' || password.length < 4) {
       return res.status(400).json({ error: 'Password must be at least 4 characters long.' });
     }
@@ -73,49 +68,42 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
     const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : 'user';
     const roleAlias = normalizedRole === 'volunteer' ? 'operator' : normalizedRole;
     const allowedRoles = ['admin', 'operator', 'candidate', 'user'];
-    if (!allowedRoles.includes(roleAlias)) return res.status(400).json({ error: 'Invalid role' });
+    if (!allowedRoles.includes(roleAlias)) {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
 
-    const normalizedEmail =
-      typeof email === 'string' && email.trim() !== '' ? email.trim() : null;
+    // Prevent duplicate usernames
+    const existingUser = await User.findOne({ username: normalizedUsername });
+    if (existingUser) {
+      return res.status(409).json({ error: 'User already exists' });
+    }
 
-    // Prevent duplicates by username or email (if supplied)
-    const existingUser = await User.findOne(
-      normalizedEmail
-        ? { $or: [{ username: normalizedUsername }, { email: normalizedEmail }] }
-        : { username: normalizedUsername }
-    );
-    if (existingUser) return res.status(409).json({ error: 'User already exists' });
-
-    // Validate DB IDs against available list
+    // Validate DB IDs against available list (best-effort)
     let finalAllowed = [];
     if (Array.isArray(allowedDatabaseIds) && allowedDatabaseIds.length > 0) {
       try {
         const available = await listVoterDatabases();
         const validIds = new Set(available.map(db => db.id));
-        finalAllowed = Array.from(
-          new Set(
-            allowedDatabaseIds
-              .map(id => (typeof id === 'string' ? id.trim() : ''))
-              .filter(id => id && validIds.has(id))
-          )
-        );
+        finalAllowed = Array.from(new Set(
+          allowedDatabaseIds
+            .map(id => (typeof id === 'string' ? id.trim() : ''))
+            .filter(id => id && validIds.has(id))
+        ));
       } catch {
-        finalAllowed = [...new Set(allowedDatabaseIds.filter(Boolean))];
+        // If listing fails, just keep the provided values (deduped + truthy)
+        finalAllowed = Array.from(new Set(allowedDatabaseIds.filter(Boolean)));
       }
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await User.create({
       username: normalizedUsername,
-      email: normalizedEmail || undefined,
       passwordHash,
       role: roleAlias,
       allowedDatabaseIds: finalAllowed,
     });
 
-    res.status(201).json({
-      user: serializeUser(user),
-    });
+    res.status(201).json({ user: serializeUser(user) });
   } catch (e) {
     console.error('ADMIN_CREATE_USER_ERROR', e);
     res.status(500).json({ error: 'Server error' });
@@ -155,7 +143,7 @@ router.patch('/users/:id/role', auth, requireRole('admin'), async (req, res) => 
     const user = await User.findByIdAndUpdate(
       id,
       { role: roleAlias },
-      { new: true, projection: 'username email role allowedDatabaseIds' }
+      { new: true, projection: 'username role allowedDatabaseIds' }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ user: serializeUser(user) });
@@ -177,7 +165,7 @@ router.patch('/users/:id/password', auth, requireRole('admin'), async (req, res)
     const user = await User.findByIdAndUpdate(
       id,
       { passwordHash },
-      { new: true, projection: 'username email role allowedDatabaseIds' }
+      { new: true, projection: 'username role allowedDatabaseIds' }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ ok: true });
@@ -194,6 +182,7 @@ router.patch('/users/:id/databases', auth, requireRole('admin'), async (req, res
     let { allowedDatabaseIds = [] } = req.body || {};
     if (!Array.isArray(allowedDatabaseIds)) allowedDatabaseIds = [];
 
+    // Best-effort validation
     try {
       const available = await listVoterDatabases();
       const validIds = new Set(available.map(db => db.id));
@@ -201,13 +190,13 @@ router.patch('/users/:id/databases', auth, requireRole('admin'), async (req, res
         .map(v => (typeof v === 'string' ? v.trim() : ''))
         .filter(v => v && validIds.has(v));
     } catch {
-      // keep as-is if list fails (or clear to be strict)
+      // keep as-is on failure
     }
 
     const user = await User.findByIdAndUpdate(
       id,
       { allowedDatabaseIds },
-      { new: true, projection: 'username email role allowedDatabaseIds' }
+      { new: true, projection: 'username role allowedDatabaseIds' }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ user: serializeUser(user) });
@@ -217,18 +206,16 @@ router.patch('/users/:id/databases', auth, requireRole('admin'), async (req, res
   }
 });
 
-/** Combined PUT for client compatibility (role + DBs in one call) */
+/** Combined PUT (role + DBs in one call) */
 router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     let { role, databaseIds, allowedDatabaseIds } = req.body || {};
 
-    // map 'volunteer' (old UI) -> 'operator'
     if (typeof role === 'string') {
       const r = role.toLowerCase();
       role = r === 'volunteer' ? 'operator' : r;
     }
-
     const allowedRoles = new Set(['admin', 'operator', 'candidate', 'user']);
     if (!allowedRoles.has(role)) {
       return res.status(400).json({ error: 'Invalid role' });
@@ -237,6 +224,7 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
     let finalDbIds = Array.isArray(allowedDatabaseIds) ? allowedDatabaseIds : databaseIds;
     if (!Array.isArray(finalDbIds)) finalDbIds = [];
 
+    // Best-effort validation
     try {
       const available = await listVoterDatabases();
       const valid = new Set(available.map(d => d.id));
@@ -244,23 +232,21 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
         .map(v => (typeof v === 'string' ? v.trim() : ''))
         .filter(v => v && valid.has(v));
     } catch {
-      // keep as-is on failure
+      // keep as-is
     }
 
     const user = await User.findByIdAndUpdate(
       id,
       { $set: { role, allowedDatabaseIds: finalDbIds } },
-      { new: true, projection: 'username email role allowedDatabaseIds' }
+      { new: true, projection: 'username role allowedDatabaseIds' }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const serialized = serializeUser(user);
-
     res.json({
       user: {
         ...serialized,
-        // also return databaseIds for older UIs
-        databaseIds: serialized.allowedDatabaseIds,
+        databaseIds: serialized.allowedDatabaseIds, // backward compat
       },
     });
   } catch (e) {
