@@ -41,26 +41,35 @@ router.post('/login', async (req, res) => {
     }
 
     // Look up by username or email
-    const queries = [];
+    const searchConditions = [];
+    const seenKeys = new Set();
+    const addCondition = (field, raw) => {
+      if (typeof raw !== 'string') return;
+      const value = raw.trim();
+      if (!value) return;
+      const key = `${field}:${value.toLowerCase()}`;
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+      searchConditions.push({ [field]: value });
+    };
+
     if (usernameCandidate) {
-      queries.push({ username: usernameCandidate }, { email: usernameCandidate });
+      addCondition('username', usernameCandidate);
+      addCondition('email', usernameCandidate);
     }
     if (emailCandidate) {
-      queries.push({ email: emailCandidate }, { username: emailCandidate });
-    }
-    // de-duplicate
-    const seen = new Set();
-    const deduped = [];
-    for (const q of queries) {
-      const [[k, v]] = Object.entries(q);
-      const key = `${k}:${v}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        deduped.push({ [k]: v });
-      }
+      addCondition('email', emailCandidate);
+      addCondition('username', emailCandidate);
     }
 
-    const user = await User.findOne(deduped.length === 1 ? deduped[0] : { $or: deduped });
+    if (!searchConditions.length) {
+      return res.status(400).json({ error: 'Missing credentials' });
+    }
+
+    const lookupFilter =
+      searchConditions.length === 1 ? searchConditions[0] : { $or: searchConditions };
+
+    const user = await User.findOne(lookupFilter).collation({ locale: 'en', strength: 2 });
     if (!user) return res.status(400).json({ error: 'Invalid credentials' });
 
     const ok = await bcrypt.compare(password, user.passwordHash);

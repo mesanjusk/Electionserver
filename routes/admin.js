@@ -71,7 +71,7 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
     }
 
     const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : 'user';
-    const roleAlias = normalizedRole === 'volunteer' ? 'user' : normalizedRole;
+    const roleAlias = normalizedRole === 'volunteer' ? 'operator' : normalizedRole;
     const allowedRoles = ['admin', 'operator', 'candidate', 'user'];
     if (!allowedRoles.includes(roleAlias)) return res.status(400).json({ error: 'Invalid role' });
 
@@ -144,7 +144,7 @@ router.patch('/users/:id/role', auth, requireRole('admin'), async (req, res) => 
     const { id } = req.params;
     const { role } = req.body || {};
     const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : '';
-    const roleAlias = normalizedRole === 'volunteer' ? 'user' : normalizedRole;
+    const roleAlias = normalizedRole === 'volunteer' ? 'operator' : normalizedRole;
     const allowedRoles = ['admin', 'operator', 'candidate', 'user'];
     if (!allowedRoles.includes(roleAlias)) return res.status(400).json({ error: 'Invalid role' });
 
@@ -223,10 +223,10 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
     const { id } = req.params;
     let { role, databaseIds, allowedDatabaseIds } = req.body || {};
 
-    // map 'volunteer' (old UI) -> 'user'
+    // map 'volunteer' (old UI) -> 'operator'
     if (typeof role === 'string') {
       const r = role.toLowerCase();
-      role = r === 'volunteer' ? 'user' : r;
+      role = r === 'volunteer' ? 'operator' : r;
     }
 
     const allowedRoles = new Set(['admin', 'operator', 'candidate', 'user']);
