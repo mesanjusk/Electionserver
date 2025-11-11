@@ -106,18 +106,19 @@ router.post('/login', async (req, res) => {
     }
 
     // ---- Generate token ----
-    const token = jwt.sign(
-      {
-        id: user._id,
-        role: user.role,
-        username: user.username || null,
-        email: user.email || null,
-        allowedDatabaseIds: user.allowedDatabaseIds || [],
-        deviceId: user.deviceIdBound || deviceId || null,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const tokenPayload = {
+      id: user._id,
+      role: user.role,
+      username: user.username || null,
+      email: user.email || null,
+      allowedDatabaseIds: user.allowedDatabaseIds || [],
+      deviceIdBound: user.deviceIdBound || null,
+    };
+    if (deviceId) tokenPayload.deviceId = deviceId;
+
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
+      expiresIn: '7d',
+    });
 
     // ---- Response ----
     res.json({

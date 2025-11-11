@@ -1,14 +1,19 @@
 // server/routes/voters.sync.js
 import { Router } from 'express';
-import Voter from '../models/Voter.js';
+import { resolveVoterModelForRequest } from '../lib/voterDatabases.js';
 import { auth } from '../middleware/auth.js';
 import { requireAuth } from '../middleware/roles.js';
 
 const router = Router();
 
 // GET /api/voters/export?page=1&limit=5000&since=ISO
+// Requires databaseId when multiple databases are assigned to the user.
 router.get('/export', auth, requireAuth, async (req, res) => {
   try {
+    const ctx = resolveVoterModelForRequest(req, res);
+    if (!ctx) return;
+    const { model: VoterModel, databaseId } = ctx;
+
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '5000', 10), 1), 20000);
     const skip = (page - 1) * limit;
@@ -17,14 +22,14 @@ router.get('/export', auth, requireAuth, async (req, res) => {
     const filter = since ? { updatedAt: { $gt: since } } : {};
 
     const [items, count] = await Promise.all([
-      Voter.find(filter).sort({ _id: 1 }).skip(skip).limit(limit).lean(),
-      Voter.countDocuments(filter),
+      VoterModel.find(filter).sort({ _id: 1 }).skip(skip).limit(limit).lean(),
+      VoterModel.countDocuments(filter),
     ]);
 
     const hasMore = skip + items.length < count;
     const serverTime = new Date().toISOString();
 
-    res.json({ items, hasMore, serverTime, page, count });
+    res.json({ items, hasMore, serverTime, page, count, databaseId });
   } catch (e) {
     console.error('export error', e);
     res.status(500).json({ error: 'export_failed' });
@@ -32,9 +37,13 @@ router.get('/export', auth, requireAuth, async (req, res) => {
 });
 
 // POST /api/voters/bulk-upsert
-// { changes: [{_id, op: "upsert", payload: {...}, updatedAt}] }
+// { databaseId?, changes: [{_id, op: "upsert", payload: {...}, updatedAt}] }
 router.post('/bulk-upsert', auth, requireAuth, async (req, res) => {
   try {
+    const ctx = resolveVoterModelForRequest(req, res, { requireExplicitSelection: true });
+    if (!ctx) return;
+    const { model: VoterModel, databaseId } = ctx;
+
     const { changes } = req.body || {};
     if (!Array.isArray(changes) || !changes.length) {
       return res.json({ successIds: [], failed: [] });
@@ -48,9 +57,9 @@ router.post('/bulk-upsert', auth, requireAuth, async (req, res) => {
         const { _id, op, payload, updatedAt } = ch;
         if (!(_id && op === 'upsert')) { failed.push({ _id, reason: 'bad_change' }); continue; }
 
-        const doc = await Voter.findById(_id);
+        const doc = await VoterModel.findById(_id);
         if (!doc) {
-          await Voter.create({ _id, ...(payload || {}) });
+          await VoterModel.create({ _id, ...(payload || {}) });
           successIds.push(_id);
           continue;
         }
@@ -67,7 +76,7 @@ router.post('/bulk-upsert', auth, requireAuth, async (req, res) => {
       }
     }
 
-    res.json({ successIds, failed });
+    res.json({ successIds, failed, databaseId });
   } catch (e) {
     console.error('bulk-upsert error', e);
     res.status(500).json({ error: 'bulk_upsert_failed' });

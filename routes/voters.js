@@ -1,6 +1,6 @@
 // server/routes/voters.js
 import { Router } from 'express';
-import Voter from '../models/Voter.js';
+import { resolveVoterModelForRequest } from '../lib/voterDatabases.js';
 import { auth } from '../middleware/auth.js';
 import { requireAuth } from '../middleware/roles.js';
 
@@ -105,7 +105,7 @@ function buildSearchQuery(q, filters) {
   return query;
 }
 
-async function applyMobileUpdate(matchQuery, body) {
+async function applyMobileUpdate(VoterModel, matchQuery, body) {
   const candidate = pickMobileCandidate(body);
   if (candidate === null) return { status: 400, error: 'Mobile number is required' };
 
@@ -117,7 +117,7 @@ async function applyMobileUpdate(matchQuery, body) {
     updatedAt: new Date(),
   };
 
-  const doc = await Voter.findOneAndUpdate(matchQuery, { $set }, { new: true, lean: true });
+  const doc = await VoterModel.findOneAndUpdate(matchQuery, { $set }, { new: true, lean: true });
   if (!doc) return { status: 404, error: 'Voter not found' };
   return { status: 200, data: doc };
 }
@@ -126,6 +126,7 @@ async function applyMobileUpdate(matchQuery, body) {
 
 /**
  * GET /api/voters/search
+ * databaseId=collection_name (required when multiple databases assigned)
  * q= string                 (regex search on name, voter_id, phones, plus __raw fallbacks)
  * page= number>=1           (default 1)
  * limit= number<=100        (default 20)
@@ -134,6 +135,10 @@ async function applyMobileUpdate(matchQuery, body) {
  */
 router.get('/search', auth, requireAuth, async (req, res) => {
   try {
+    const ctx = resolveVoterModelForRequest(req, res);
+    if (!ctx) return;
+    const { model: VoterModel, databaseId } = ctx;
+
     const q = String(req.query.q || '').trim();
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 100);
@@ -145,12 +150,12 @@ router.get('/search', auth, requireAuth, async (req, res) => {
     const projection = safeProjectionFromCSV(req.query.fields);
 
     const [results, total] = await Promise.all([
-      Voter.find(findQuery)
+      VoterModel.find(findQuery)
         .select(projection ? projection : '-__v')
         .skip(skip)
         .limit(limit)
         .lean(),
-      Voter.countDocuments(findQuery),
+      VoterModel.countDocuments(findQuery),
     ]);
 
     res.json({
@@ -159,6 +164,7 @@ router.get('/search', auth, requireAuth, async (req, res) => {
       limit,
       total,
       pages: Math.max(1, Math.ceil(total / limit)),
+      databaseId,
     });
   } catch (e) {
     console.error('Search error', e);
@@ -168,11 +174,16 @@ router.get('/search', auth, requireAuth, async (req, res) => {
 
 /**
  * GET /api/voters/all
+ * databaseId=collection_name (required when multiple databases assigned)
  * Loads ALL voter records (no pagination). Optional q= and filters=.
  * WARNING: for very large datasets, prefer /search with paging.
  */
 router.get('/all', auth, requireAuth, async (req, res) => {
   try {
+    const ctx = resolveVoterModelForRequest(req, res);
+    if (!ctx) return;
+    const { model: VoterModel, databaseId } = ctx;
+
     const q = String(req.query.q || '').trim();
     const filters = parseFilters(req.query);
     const projection = safeProjectionFromCSV(req.query.fields) || undefined;
@@ -181,11 +192,11 @@ router.get('/all', auth, requireAuth, async (req, res) => {
 
     // Optional hard cap to prevent accidental OOM in cloud; lift if you need
     const HARD_CAP = parseInt(process.env.VOTERS_ALL_HARDCAP || '0', 10); // 0 = no cap
-    let cursor = Voter.find(findQuery, projection).lean();
+    let cursor = VoterModel.find(findQuery, projection).lean();
     if (HARD_CAP > 0) cursor = cursor.limit(HARD_CAP);
 
     const docs = await cursor.exec();
-    res.json({ total: docs.length, results: docs });
+    res.json({ total: docs.length, results: docs, databaseId });
   } catch (e) {
     console.error('All error', e);
     res.status(500).json({ error: 'Server error' });
@@ -198,6 +209,10 @@ router.get('/all', auth, requireAuth, async (req, res) => {
  */
 router.patch('/by-epic/:epic', auth, requireAuth, async (req, res) => {
   try {
+    const ctx = resolveVoterModelForRequest(req, res, { requireExplicitSelection: true });
+    if (!ctx) return;
+    const { model: VoterModel } = ctx;
+
     const epic = String(req.params.epic || '').trim();
     if (!epic) return res.status(400).json({ error: 'EPIC is required' });
 
@@ -211,7 +226,7 @@ router.patch('/by-epic/:epic', auth, requireAuth, async (req, res) => {
       ],
     };
 
-    const result = await applyMobileUpdate(match, req.body);
+    const result = await applyMobileUpdate(VoterModel, match, req.body);
     if (result.error) return res.status(result.status).json({ error: result.error });
     res.json(result.data);
   } catch (e) {
@@ -226,8 +241,12 @@ router.patch('/by-epic/:epic', auth, requireAuth, async (req, res) => {
  */
 router.patch('/:id', auth, requireAuth, async (req, res) => {
   try {
+    const ctx = resolveVoterModelForRequest(req, res, { requireExplicitSelection: true });
+    if (!ctx) return;
+    const { model: VoterModel } = ctx;
+
     const { id } = req.params;
-    const result = await applyMobileUpdate({ _id: id }, req.body);
+    const result = await applyMobileUpdate(VoterModel, { _id: id }, req.body);
     if (result.error) return res.status(result.status).json({ error: result.error });
     res.json(result.data);
   } catch (e) {
@@ -239,10 +258,15 @@ router.patch('/:id', auth, requireAuth, async (req, res) => {
 /* --------------------------- SYNC ENDPOINTS --------------------------- */
 /**
  * GET /api/voters/export?page=1&limit=5000&since=ISO
+ * databaseId=collection_name (required when multiple databases assigned)
  * Paged export for initial/full pull; supports incremental pulls with ?since=updatedAt ISO.
  */
 router.get('/export', auth, requireAuth, async (req, res) => {
   try {
+    const ctx = resolveVoterModelForRequest(req, res);
+    if (!ctx) return;
+    const { model: VoterModel, databaseId } = ctx;
+
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || '5000', 10), 1), 20000);
     const skip = (page - 1) * limit;
@@ -251,14 +275,14 @@ router.get('/export', auth, requireAuth, async (req, res) => {
     const filter = since ? { updatedAt: { $gt: since } } : {};
 
     const [items, count] = await Promise.all([
-      Voter.find(filter).sort({ _id: 1 }).skip(skip).limit(limit).lean(),
-      Voter.countDocuments(filter),
+      VoterModel.find(filter).sort({ _id: 1 }).skip(skip).limit(limit).lean(),
+      VoterModel.countDocuments(filter),
     ]);
 
     const hasMore = skip + items.length < count;
     const serverTime = new Date().toISOString();
 
-    res.json({ items, hasMore, serverTime, page, count });
+    res.json({ items, hasMore, serverTime, page, count, databaseId });
   } catch (e) {
     console.error('export error', e);
     res.status(500).json({ error: 'export_failed' });
@@ -267,11 +291,16 @@ router.get('/export', auth, requireAuth, async (req, res) => {
 
 /**
  * POST /api/voters/bulk-upsert
+ * Body should include databaseId when user has multiple assignments.
  * { changes: [{ _id, op: "upsert", payload: {...}, updatedAt }] }
  * Last-write-wins using updatedAt.
  */
 router.post('/bulk-upsert', auth, requireAuth, async (req, res) => {
   try {
+    const ctx = resolveVoterModelForRequest(req, res, { requireExplicitSelection: true });
+    if (!ctx) return;
+    const { model: VoterModel, databaseId } = ctx;
+
     const { changes } = req.body || {};
     if (!Array.isArray(changes) || !changes.length) {
       return res.json({ successIds: [], failed: [] });
@@ -285,9 +314,9 @@ router.post('/bulk-upsert', auth, requireAuth, async (req, res) => {
         const { _id, op, payload, updatedAt } = ch;
         if (!(_id && op === 'upsert')) { failed.push({ _id, reason: 'bad_change' }); continue; }
 
-        const doc = await Voter.findById(_id);
+        const doc = await VoterModel.findById(_id);
         if (!doc) {
-          await Voter.create({ _id, ...(payload || {}) });
+          await VoterModel.create({ _id, ...(payload || {}) });
           successIds.push(_id);
           continue;
         }
@@ -304,7 +333,7 @@ router.post('/bulk-upsert', auth, requireAuth, async (req, res) => {
       }
     }
 
-    res.json({ successIds, failed });
+    res.json({ successIds, failed, databaseId });
   } catch (e) {
     console.error('bulk-upsert error', e);
     res.status(500).json({ error: 'bulk_upsert_failed' });

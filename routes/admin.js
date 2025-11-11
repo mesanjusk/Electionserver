@@ -1,58 +1,12 @@
 // server/routes/admin.js
 import { Router } from 'express';
-import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
 import { auth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/roles.js';
+import { listVoterDatabases } from '../lib/voterDatabases.js';
 
 const router = Router();
-
-function humanizeCollectionName(name = '') {
-  const cleaned = String(name)
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!cleaned) return String(name);
-  return cleaned
-    .split(' ')
-    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
-async function listVoterDatabases() {
-  const connection = mongoose.connection;
-  if (!connection) return [];
-
-  const client = typeof connection.getClient === 'function'
-    ? connection.getClient()
-    : connection.client;
-  if (!client) return [];
-
-  const fallbackDbName = connection.name || 'voter_search';
-  const targetDbName =
-    process.env.VOTER_SEARCH_DB ||
-    process.env.MONGO_VOTER_DB ||
-    process.env.MONGO_DB ||
-    fallbackDbName;
-
-  const db = client.db(targetDbName);
-  const collections = await db.listCollections().toArray();
-
-  return collections
-    .filter(col => !col.name.startsWith('system.'))
-    .map(col => {
-      const pretty = humanizeCollectionName(col.name);
-      return {
-        id: col.name,
-        _id: col.name,
-        name: pretty,
-        label: pretty,
-        collection: col.name,
-        type: col.type || 'collection',
-      };
-    });
-}
 
 router.get('/databases', auth, requireRole('admin'), async (_req, res) => {
   try {
