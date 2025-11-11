@@ -22,9 +22,9 @@ router.get('/databases', auth, requireRole('admin'), async (_req, res) => {
 /** List users (lightweight) */
 router.get('/users', auth, requireRole('admin'), async (_req, res) => {
   try {
-    const users = await User.find({}, 'username role allowedDatabaseIds createdAt updatedAt')
+    const users = await User.find({}, 'username email role allowedDatabaseIds createdAt updatedAt')
       .sort({ createdAt: -1 });
-    res.json({ users });
+  res.json({ users });
   } catch (e) {
     console.error('ADMIN_LIST_USERS_ERROR', e);
     res.status(500).json({ error: 'Server error' });
@@ -77,7 +77,6 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
           )
         );
       } catch {
-        // If listing fails, still allow saving requested IDs (optional behavior)
         finalAllowed = [...new Set(allowedDatabaseIds.filter(Boolean))];
       }
     }
@@ -109,7 +108,6 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
 router.delete('/users/:id', auth, requireRole('admin'), async (req, res) => {
   try {
     const { id } = req.params;
-    // Prevent self-delete
     if (String(req.user?.id) === String(id)) {
       return res.status(400).json({ error: 'You cannot delete your own account' });
     }
@@ -130,7 +128,6 @@ router.patch('/users/:id/role', auth, requireRole('admin'), async (req, res) => 
     const allowedRoles = ['admin', 'operator', 'candidate', 'user'];
     if (!allowedRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' });
 
-    // Prevent changing your own role
     if (String(req.user?.id) === String(id) && req.user.role !== role) {
       return res.status(400).json({ error: 'You cannot change your own role' });
     }
@@ -138,7 +135,7 @@ router.patch('/users/:id/role', auth, requireRole('admin'), async (req, res) => 
     const user = await User.findByIdAndUpdate(
       id,
       { role },
-      { new: true, projection: 'username role allowedDatabaseIds' }
+      { new: true, projection: 'username email role allowedDatabaseIds' }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ user });
@@ -160,7 +157,7 @@ router.patch('/users/:id/password', auth, requireRole('admin'), async (req, res)
     const user = await User.findByIdAndUpdate(
       id,
       { passwordHash },
-      { new: true, projection: 'username role allowedDatabaseIds' }
+      { new: true, projection: 'username email role allowedDatabaseIds' }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ ok: true });
@@ -177,7 +174,6 @@ router.patch('/users/:id/databases', auth, requireRole('admin'), async (req, res
     let { allowedDatabaseIds = [] } = req.body || {};
     if (!Array.isArray(allowedDatabaseIds)) allowedDatabaseIds = [];
 
-    // Validate against available DB list (best-effort)
     try {
       const available = await listVoterDatabases();
       const validIds = new Set(available.map(db => db.id));
@@ -185,20 +181,72 @@ router.patch('/users/:id/databases', auth, requireRole('admin'), async (req, res
         .map(v => (typeof v === 'string' ? v.trim() : ''))
         .filter(v => v && validIds.has(v));
     } catch {
-      // If list fails, you can still save as-is; comment out next line to allow.
-      // (Keeping strict to avoid typos)
-      // allowedDatabaseIds = [];
+      // keep as-is if list fails (or clear to be strict)
     }
 
     const user = await User.findByIdAndUpdate(
       id,
       { allowedDatabaseIds },
-      { new: true, projection: 'username role allowedDatabaseIds' }
+      { new: true, projection: 'username email role allowedDatabaseIds' }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ user });
   } catch (e) {
     console.error('ADMIN_UPDATE_DATABASES_ERROR', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/** Combined PUT for client compatibility (role + DBs in one call) */
+router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    let { role, databaseIds, allowedDatabaseIds } = req.body || {};
+
+    // map 'volunteer' (old UI) -> 'operator'
+    if (typeof role === 'string') {
+      const r = role.toLowerCase();
+      role = r === 'volunteer' ? 'operator' : r;
+    }
+
+    const allowedRoles = new Set(['admin', 'operator', 'candidate', 'user']);
+    if (!allowedRoles.has(role)) {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+
+    let finalDbIds = Array.isArray(allowedDatabaseIds) ? allowedDatabaseIds : databaseIds;
+    if (!Array.isArray(finalDbIds)) finalDbIds = [];
+
+    try {
+      const available = await listVoterDatabases();
+      const valid = new Set(available.map(d => d.id));
+      finalDbIds = finalDbIds
+        .map(v => (typeof v === 'string' ? v.trim() : ''))
+        .filter(v => v && valid.has(v));
+    } catch {
+      // keep as-is on failure
+    }
+
+    const user = await User.findByIdAndUpdate(
+      id,
+      { $set: { role, allowedDatabaseIds: finalDbIds } },
+      { new: true, projection: 'username email role allowedDatabaseIds' }
+    );
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    res.json({
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        allowedDatabaseIds: user.allowedDatabaseIds,
+        // also return databaseIds for older UIs
+        databaseIds: user.allowedDatabaseIds,
+      },
+    });
+  } catch (e) {
+    console.error('ADMIN_UPSERT_USER_ERROR', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
