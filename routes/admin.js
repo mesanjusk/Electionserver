@@ -106,6 +106,19 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
     res.status(201).json({ user: serializeUser(user) });
   } catch (e) {
     console.error('ADMIN_CREATE_USER_ERROR', e);
+    
+    if (e?.code === 11000 || /E11000/.test(e?.message || '')) {
+      const keyPattern = e?.keyPattern || {};
+      const duplicateField = Object.keys(keyPattern)[0] || 'username';
+      const readableField = duplicateField === 'email' ? 'Email' : 'Username';
+      return res.status(409).json({ error: `${readableField} already exists` });
+    }
+
+    if (e?.name === 'ValidationError') {
+      const message = typeof e?.message === 'string' ? e.message : 'Validation failed';
+      return res.status(400).json({ error: message });
+    }
+
     res.status(500).json({ error: 'Server error' });
   }
 });
