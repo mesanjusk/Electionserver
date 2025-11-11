@@ -1,3 +1,4 @@
+// server/index.js (or server.js)
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
@@ -8,10 +9,22 @@ import voterRoutes from './routes/voters.js';
 import adminRoutes from './routes/admin.js';
 import User from './models/User.js';
 import bcrypt from 'bcryptjs';
+import candidateRoutes from './routes/candidate.js';
 
 dotenv.config();
 
 const app = express();
+
+/* ---------------------- Device ID extractor (global) --------------------- */
+/** Reads device ID from header or body and puts it on req.deviceId */
+function attachDeviceId(req, _res, next) {
+  const headerId =
+    req.get('X-Device-Id') ||
+    req.get('x-device-id') ||
+    req.get('X-DEVICE-ID');
+  req.deviceId = headerId || req.body?.deviceId || null;
+  next();
+}
 
 /* -------------------------------- CORS -------------------------------- */
 const defaultAllowedOrigins = [
@@ -34,16 +47,20 @@ function isOriginAllowed(origin) {
   return allowedOrigins.includes(origin);
 }
 
+// Fast-path OPTIONS with custom headers allowed (incl. X-Device-Id)
 app.use((req, res, next) => {
-  // Short-circuit preflight with explicit headers (faster than full cors() for OPTIONS)
   if (req.method === 'OPTIONS') {
     const origin = req.headers.origin || '';
     if (isOriginAllowed(origin)) {
       res.header('Access-Control-Allow-Origin', origin);
       res.header('Vary', 'Origin');
       res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-      res.header('Access-Control-Allow-Credentials', 'true'); // matches cors({credentials:true})
+      res.header(
+        'Access-Control-Allow-Headers',
+        // ✨ Added X-Device-Id
+        'Content-Type, Authorization, X-Device-Id'
+      );
+      res.header('Access-Control-Allow-Credentials', 'true');
       return res.status(204).end();
     }
     return res.status(403).json({ error: 'Not allowed by CORS (preflight)' });
@@ -51,18 +68,22 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(cors({
-  origin: (origin, cb) => {
-    if (isOriginAllowed(origin)) return cb(null, true);
-    return cb(new Error('Not allowed by CORS'));
-  },
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true, // flip to false if you never use cookies
-}));
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      if (isOriginAllowed(origin)) return cb(null, true);
+      return cb(new Error('Not allowed by CORS'));
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    // ✨ Allow custom device header in actual requests too
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id'],
+    credentials: true,
+  })
+);
 
 /* ----------------------------- General middleware ----------------------------- */
 app.use(express.json({ limit: '1mb' }));
+app.use(attachDeviceId); // ✨ make req.deviceId available to all routes
 app.use(morgan('dev'));
 
 // Handle invalid JSON body cleanly
@@ -81,6 +102,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/voters', voterRoutes);
+app.use('/api/candidate', candidateRoutes);
 
 // Optional: redirect SPA-only deep links back to root (backend hosts API only)
 ['/login'].forEach(route => {
@@ -135,4 +157,7 @@ connectDB(process.env.MONGO_URI)
     process.on('SIGINT', shutdown('SIGINT'));
     process.on('SIGTERM', shutdown('SIGTERM'));
   })
-  .catch((e) => { console.error('DB Error', e); process.exit(1); });
+  .catch((e) => {
+    console.error('DB Error', e);
+    process.exit(1);
+  });
