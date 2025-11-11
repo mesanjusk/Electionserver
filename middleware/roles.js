@@ -8,15 +8,13 @@ export function requireAuth(req, res, next) {
   next();
 }
 
-/**
- * Role-based authorization.
- * Usage: app.get('/admin', auth, requireRole('admin'), handler)
+/** Role-based authorization
+ * Usage example:
+ *   router.get('/admin-only', auth, requireRole('admin'), handler)
  */
 export function requireRole(...roles) {
   return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({ error: 'Forbidden: insufficient role' });
     }
@@ -24,13 +22,10 @@ export function requireRole(...roles) {
   };
 }
 
-/**
- * Optional middleware to restrict candidate accounts
- * to their bound device only.
- * Use after JWT auth + extractDeviceId middleware.
+/** Optional: restrict candidate accounts to the bound device only.
+ * Put after JWT auth and any middleware that sets req.deviceId (if you use one).
  */
 export function requireSameDevice(req, res, next) {
-  // Only applies to candidate-type users
   if (req.user?.role === 'candidate') {
     const currentDevice = req.deviceId;
     const boundDevice = req.user?.deviceIdBound;
@@ -38,11 +33,9 @@ export function requireSameDevice(req, res, next) {
     if (!boundDevice) {
       return res.status(423).json({
         error: 'DEVICE_NOT_BOUND',
-        message:
-          'Candidate account has not yet been activated on any device. Please log in once to bind it.',
+        message: 'Candidate account not yet activated on any device.',
       });
     }
-
     if (!currentDevice || currentDevice !== boundDevice) {
       return res.status(423).json({
         error: 'ACCOUNT_LOCKED_DIFFERENT_DEVICE',
