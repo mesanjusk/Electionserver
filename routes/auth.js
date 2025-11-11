@@ -7,12 +7,18 @@ const router = Router();
 
 /**
  * POST /api/auth/login
- * Body: { email, password, userType?, deviceId? }
+ * Body: { username?, email?, password, userType?, deviceId? }
  * Header (optional): X-Device-Id
  */
 router.post('/login', async (req, res) => {
   try {
-    const { email, password, userType, deviceId: bodyDeviceId } = req.body;
+    const {
+      username,
+      email,
+      password,
+      userType,
+      deviceId: bodyDeviceId,
+    } = req.body || {};
     const headerDeviceId =
       req.get('X-Device-Id') ||
       req.get('x-device-id') ||
@@ -20,11 +26,44 @@ router.post('/login', async (req, res) => {
     const deviceId = headerDeviceId || bodyDeviceId || null;
 
     // ---- Basic checks ----
-    if (!email || !password) {
+    if (!password || typeof password !== 'string') {
       return res.status(400).json({ error: 'Missing credentials' });
     }
 
-    const user = await User.findOne({ email });
+    const usernameCandidate =
+      typeof username === 'string' && username.trim() !== ''
+        ? username.trim()
+        : '';
+    const emailCandidate =
+      typeof email === 'string' && email.trim() !== '' ? email.trim() : '';
+
+    if (!usernameCandidate && !emailCandidate) {
+      return res.status(400).json({ error: 'Missing credentials' });
+    }
+
+    const queryCandidates = [];
+    if (usernameCandidate) {
+      queryCandidates.push({ username: usernameCandidate });
+      queryCandidates.push({ email: usernameCandidate });
+    }
+    if (emailCandidate) {
+      queryCandidates.push({ email: emailCandidate });
+    }
+
+    const deduped = [];
+    const seen = new Set();
+    for (const candidate of queryCandidates) {
+      const [[key, value]] = Object.entries(candidate);
+      const hash = `${key}:${value}`;
+      if (!seen.has(hash)) {
+        seen.add(hash);
+        deduped.push({ [key]: value });
+      }
+    }
+
+    const user = await User.findOne(
+      deduped.length === 1 ? deduped[0] : { $or: deduped }
+    );
     if (!user) return res.status(400).json({ error: 'Invalid credentials' });
 
     const ok = await bcrypt.compare(password, user.passwordHash);
@@ -71,7 +110,9 @@ router.post('/login', async (req, res) => {
       {
         id: user._id,
         role: user.role,
-        email: user.email,
+        username: user.username || null,
+        email: user.email || null,
+        allowedDatabaseIds: user.allowedDatabaseIds || [],
         deviceId: user.deviceIdBound || deviceId || null,
       },
       process.env.JWT_SECRET,
@@ -82,10 +123,13 @@ router.post('/login', async (req, res) => {
     res.json({
       token,
       user: {
-        email: user.email,
+        id: user._id,
+        username: user.username || null,
+        email: user.email || null,
         role: user.role,
         deviceIdBound: user.deviceIdBound || null,
         deviceBoundAt: user.deviceBoundAt || null,
+        allowedDatabaseIds: user.allowedDatabaseIds || [],
       },
     });
   } catch (e) {

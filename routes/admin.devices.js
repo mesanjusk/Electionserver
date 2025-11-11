@@ -12,7 +12,7 @@ const router = Router();
 router.post(
   "/candidates/:userId/reset-device",
   auth,
-  requireRole(["admin"]),
+  requireRole('admin'),
   async (req, res) => {
     try {
       const { userId } = req.params;
@@ -25,7 +25,7 @@ router.post(
         user.deviceHistory.push({
           deviceId: user.deviceIdBound,
           action: "RESET",
-          by: req.user?.email || "admin",
+          by: req.user?.username || req.user?.email || "admin",
         });
       }
       user.deviceIdBound = null;

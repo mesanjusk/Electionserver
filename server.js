@@ -130,11 +130,24 @@ const PORT = process.env.PORT || 4000;
 async function ensureDefaultAdmin() {
   const count = await User.countDocuments();
   if (count > 0) return;
-  const email = process.env.DEFAULT_ADMIN_EMAIL || 'admin@example.com';
+  const email = process.env.DEFAULT_ADMIN_EMAIL || null;
+  const username =
+    process.env.DEFAULT_ADMIN_USERNAME ||
+    (email ? email.split('@')[0] : 'admin');
   const password = process.env.DEFAULT_ADMIN_PASSWORD || 'password123';
   const passwordHash = await bcrypt.hash(password, 10);
-  await User.create({ email, passwordHash, role: 'admin' });
-  console.log(`Auto-created admin → ${email} / ${password}`);
+  const payload = {
+    username,
+    passwordHash,
+    role: 'admin',
+  };
+  if (email) payload.email = email;
+  await User.create(payload);
+  if (email) {
+    console.log(`Auto-created admin → ${username} (${email}) / ${password}`);
+  } else {
+    console.log(`Auto-created admin → ${username} / ${password}`);
+  }
 }
 
 /* --------------------------------- Startup --------------------------------- */

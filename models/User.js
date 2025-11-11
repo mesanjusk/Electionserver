@@ -14,7 +14,20 @@ const DeviceHistorySchema = new mongoose.Schema(
 
 const userSchema = new mongoose.Schema(
   {
-    email: { type: String, required: true, unique: true, index: true },
+    username: {
+      type: String,
+      trim: true,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
+    email: {
+      type: String,
+      trim: true,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
     passwordHash: { type: String, required: true },
 
     // If you treat "user" as candidate, you can leave enum as ['admin','user'].
@@ -24,6 +37,11 @@ const userSchema = new mongoose.Schema(
       enum: ['admin', 'operator', 'candidate', 'user'],
       default: 'user',
       index: true,
+    },
+
+    allowedDatabaseIds: {
+      type: [String],
+      default: [],
     },
 
     // --- Single-device binding (used for candidates) ---
