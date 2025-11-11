@@ -8,6 +8,24 @@ import { listVoterDatabases } from '../lib/voterDatabases.js';
 
 const router = Router();
 
+function serializeUser(user) {
+  if (!user) return null;
+  const plain = typeof user.toObject === 'function' ? user.toObject() : user;
+  const rawId = plain._id || plain.id || null;
+  return {
+    id: rawId ? String(rawId) : undefined,
+    _id: plain._id,
+    username: plain.username || '',
+    email: plain.email || null,
+    role: plain.role || 'user',
+    allowedDatabaseIds: Array.isArray(plain.allowedDatabaseIds)
+      ? plain.allowedDatabaseIds
+      : [],
+    createdAt: plain.createdAt || null,
+    updatedAt: plain.updatedAt || null,
+  };
+}
+
 /** Get list of voter DBs to assign */
 router.get('/databases', auth, requireRole('admin'), async (_req, res) => {
   try {
@@ -22,9 +40,12 @@ router.get('/databases', auth, requireRole('admin'), async (_req, res) => {
 /** List users (lightweight) */
 router.get('/users', auth, requireRole('admin'), async (_req, res) => {
   try {
-    const users = await User.find({}, 'username email role allowedDatabaseIds createdAt updatedAt')
-      .sort({ createdAt: -1 });
-  res.json({ users });
+    const users = await User.find(
+      {},
+      'username email role allowedDatabaseIds createdAt updatedAt'
+    ).sort({ createdAt: -1 });
+
+    res.json({ users: users.map(serializeUser) });
   } catch (e) {
     console.error('ADMIN_LIST_USERS_ERROR', e);
     res.status(500).json({ error: 'Server error' });
@@ -91,12 +112,7 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
     });
 
     res.status(201).json({
-      user: {
-        id: user._id,
-        username: user.username,
-        role: user.role,
-        allowedDatabaseIds: user.allowedDatabaseIds,
-      },
+      user: serializeUser(user),
     });
   } catch (e) {
     console.error('ADMIN_CREATE_USER_ERROR', e);
@@ -138,7 +154,7 @@ router.patch('/users/:id/role', auth, requireRole('admin'), async (req, res) => 
       { new: true, projection: 'username email role allowedDatabaseIds' }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ user });
+    res.json({ user: serializeUser(user) });
   } catch (e) {
     console.error('ADMIN_UPDATE_ROLE_ERROR', e);
     res.status(500).json({ error: 'Server error' });
@@ -190,7 +206,7 @@ router.patch('/users/:id/databases', auth, requireRole('admin'), async (req, res
       { new: true, projection: 'username email role allowedDatabaseIds' }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ user });
+    res.json({ user: serializeUser(user) });
   } catch (e) {
     console.error('ADMIN_UPDATE_DATABASES_ERROR', e);
     res.status(500).json({ error: 'Server error' });
@@ -234,15 +250,13 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    const serialized = serializeUser(user);
+
     res.json({
       user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        allowedDatabaseIds: user.allowedDatabaseIds,
+        ...serialized,
         // also return databaseIds for older UIs
-        databaseIds: user.allowedDatabaseIds,
+        databaseIds: serialized.allowedDatabaseIds,
       },
     });
   } catch (e) {
