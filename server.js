@@ -10,6 +10,7 @@ import adminRoutes from './routes/admin.js';
 import User from './models/User.js';
 import bcrypt from 'bcryptjs';
 import candidateRoutes from './routes/candidate.js';
+import { CORS_ALLOWED_HEADERS, resolveRequestDeviceId } from './lib/deviceId.js';
 
 dotenv.config();
 
@@ -18,11 +19,7 @@ const app = express();
 /* ---------------------- Device ID extractor (global) --------------------- */
 /** Reads device ID from header or body and puts it on req.deviceId */
 function attachDeviceId(req, _res, next) {
-  const headerId =
-    req.get('X-Device-Id') ||
-    req.get('x-device-id') ||
-    req.get('X-DEVICE-ID');
-  req.deviceId = headerId || req.body?.deviceId || null;
+  req.deviceId = resolveRequestDeviceId(req, req.body?.deviceId);
   next();
 }
 
@@ -55,11 +52,7 @@ app.use((req, res, next) => {
       res.header('Access-Control-Allow-Origin', origin);
       res.header('Vary', 'Origin');
       res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-      res.header(
-        'Access-Control-Allow-Headers',
-        // ✨ Added X-Device-Id
-        'Content-Type, Authorization, X-Device-Id'
-      );
+      res.header('Access-Control-Allow-Headers', CORS_ALLOWED_HEADERS.join(', '));
       res.header('Access-Control-Allow-Credentials', 'true');
       return res.status(204).end();
     }
@@ -76,7 +69,7 @@ app.use(
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     // ✨ Allow custom device header in actual requests too
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id'],
+    allowedHeaders: CORS_ALLOWED_HEADERS,
     credentials: true,
   })
 );
