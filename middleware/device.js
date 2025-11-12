@@ -1,10 +1,8 @@
 // middleware/device.js
+import { resolveRequestDeviceId } from '../lib/deviceId.js';
+
 export function extractDeviceId(req, _res, next) {
   // Prefer a dedicated header, fallback to body field for older clients
-  const headerId =
-    req.get("X-Device-Id") ||
-    req.get("x-device-id") ||
-    req.get("X-DEVICE-ID");
-  req.deviceId = headerId || req.body?.deviceId || null;
+  req.deviceId = resolveRequestDeviceId(req, req.body?.deviceId);
   next();
 }
