@@ -1,7 +1,7 @@
 // routes/admin.devices.js
 import { Router } from "express";
 import User from "../models/User.js";
-import { auth } from "../middleware/auth.js"; // your existing JWT middleware
+import { auth } from "../middleware/auth.js";
 import { requireRole } from "../middleware/roles.js";
 
 const router = Router();
@@ -25,7 +25,7 @@ router.post(
         user.deviceHistory.push({
           deviceId: user.deviceIdBound,
           action: "RESET",
-          by: req.user?.username || req.user?.email || "admin",
+          by: req.user?.username || "admin",
         });
       }
       user.deviceIdBound = null;

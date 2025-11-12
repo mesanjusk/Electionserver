@@ -9,65 +9,32 @@ const router = Router();
 
 /**
  * POST /api/auth/login
- * Body: { username?, email?, password, userType?, deviceId? }
+ * Body: { username, password, userType?, deviceId? }
  * Header (optional): X-Device-Id
  */
 router.post('/login', async (req, res) => {
   try {
     const {
       username,
-      email,
       password,
       userType,
       deviceId: bodyDeviceId,
     } = req.body || {};
+
     const headerDeviceId = getDeviceIdFromHeaders(req);
     const deviceId = headerDeviceId || bodyDeviceId || null;
 
     // Basic checks
-    if (!password || typeof password !== 'string') {
-      return res.status(400).json({ error: 'Missing credentials' });
-    }
-
     const usernameCandidate =
-      typeof username === 'string' && username.trim() !== '' ? username.trim() : '';
-    const emailCandidate =
-      typeof email === 'string' && email.trim() !== '' ? email.trim() : '';
-
-    if (!usernameCandidate && !emailCandidate) {
+      typeof username === 'string' && username.trim() ? username.trim() : '';
+    if (!usernameCandidate || !password || typeof password !== 'string') {
       return res.status(400).json({ error: 'Missing credentials' });
     }
 
-    // Look up by username or email
-    const searchConditions = [];
-    const seenKeys = new Set();
-    const addCondition = (field, raw) => {
-      if (typeof raw !== 'string') return;
-      const value = raw.trim();
-      if (!value) return;
-      const key = `${field}:${value.toLowerCase()}`;
-      if (seenKeys.has(key)) return;
-      seenKeys.add(key);
-      searchConditions.push({ [field]: value });
-    };
+    // Username-only lookup (case-insensitive via collation)
+    const user = await User.findOne({ username: usernameCandidate })
+      .collation({ locale: 'en', strength: 2 });
 
-    if (usernameCandidate) {
-      addCondition('username', usernameCandidate);
-      addCondition('email', usernameCandidate);
-    }
-    if (emailCandidate) {
-      addCondition('email', emailCandidate);
-      addCondition('username', emailCandidate);
-    }
-
-    if (!searchConditions.length) {
-      return res.status(400).json({ error: 'Missing credentials' });
-    }
-
-    const lookupFilter =
-      searchConditions.length === 1 ? searchConditions[0] : { $or: searchConditions };
-
-    const user = await User.findOne(lookupFilter).collation({ locale: 'en', strength: 2 });
     if (!user) return res.status(400).json({ error: 'Invalid credentials' });
 
     const ok = await bcrypt.compare(password, user.passwordHash);
@@ -114,7 +81,6 @@ router.post('/login', async (req, res) => {
       id: user._id,
       role: user.role,
       username: user.username || null,
-      email: user.email || null,
       allowedDatabaseIds: user.allowedDatabaseIds || [],
       deviceIdBound: user.deviceIdBound || null,
     };
@@ -127,7 +93,6 @@ router.post('/login', async (req, res) => {
       user: {
         id: user._id,
         username: user.username || null,
-        email: user.email || null,
         role: user.role,
         deviceIdBound: user.deviceIdBound || null,
         deviceBoundAt: user.deviceBoundAt || null,
