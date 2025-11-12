@@ -1,3 +1,4 @@
+// models/User.js
 import mongoose from 'mongoose';
 
 const UserSchema = new mongoose.Schema(
@@ -5,8 +6,9 @@ const UserSchema = new mongoose.Schema(
     username: {
       type: String,
       required: true,
-      unique: true,        // ✅ only username is unique
+      unique: true,     // ✅ keep this
       trim: true,
+      lowercase: true,
     },
     passwordHash: { type: String, required: true },
     role: {
@@ -15,25 +17,21 @@ const UserSchema = new mongoose.Schema(
       default: 'user',
       required: true,
     },
-    // email is optional and NOT unique
-    email: {
-      type: String,
-      required: false,
-      index: false,
-      unique: false,
-      sparse: false,
-      trim: true,
-      lowercase: true,
-    },
-    allowedDatabaseIds: {
-      type: [String],      // e.g. ["Gondia 01","Gondia 02"]
+    email: { type: String, trim: true, lowercase: true },
+    allowedDatabaseIds: { type: [String], default: [] },
+
+    // (optional) candidate device binding fields if you use them
+    deviceIdBound: { type: String, default: null },
+    deviceBoundAt: { type: Date, default: null },
+    deviceHistory: {
+      type: [{ deviceId: String, action: String, by: String, at: { type: Date, default: Date.now } }],
       default: [],
     },
   },
   { timestamps: true }
 );
 
-// Safety: ensure there is an index on username unique
-UserSchema.index({ username: 1 }, { unique: true });
+// ⛔ REMOVE this line if it exists:
+// UserSchema.index({ username: 1 }, { unique: true });
 
 export default mongoose.model('User', UserSchema);

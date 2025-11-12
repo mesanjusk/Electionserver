@@ -266,4 +266,26 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
+
+/** Reset device binding for a user (useful for candidate re-activation) */
+router.patch('/users/:id/reset-device', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    user.deviceIdBound = null;
+    user.deviceBoundAt = null;
+    if (Array.isArray(user.deviceHistory)) {
+      user.deviceHistory.push({ action: 'RESET', by: req.user?.id || 'admin' });
+    } else {
+      user.deviceHistory = [{ action: 'RESET', by: req.user?.id || 'admin' }];
+    }
+    await user.save();
+    res.json({ user: serializeUser(user) });
+  } catch (e) {
+    console.error('ADMIN_RESET_DEVICE_ERROR', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 export default router;
