@@ -25,19 +25,25 @@ const router = Router();
  */
 router.post('/login', async (req, res) => {
   try {
-    const { username, password, userType, deviceId: bodyDeviceId } = req.body || {};
+    const { username, password, userType, deviceId: bodyDeviceId } =
+      req.body || {};
     const headerDeviceId = getDeviceIdFromHeaders(req);
     const deviceId = headerDeviceId || bodyDeviceId || null;
 
     // Basic checks
-    const usernameCandidate = typeof username === 'string' && username.trim() ? username.trim() : '';
+    const usernameCandidate =
+      typeof username === 'string' && username.trim()
+        ? username.trim()
+        : '';
     if (!usernameCandidate || !password || typeof password !== 'string') {
       return res.status(400).json({ error: 'Missing credentials' });
     }
 
     // Username lookup (case-insensitive)
-    const user = await User.findOne({ username: usernameCandidate })
-      .collation({ locale: 'en', strength: 2 });
+    const user = await User.findOne({ username: usernameCandidate }).collation({
+      locale: 'en',
+      strength: 2,
+    });
     if (!user) return res.status(400).json({ error: 'Invalid credentials' });
 
     const ok = await bcrypt.compare(password, user.passwordHash);
@@ -68,7 +74,12 @@ router.post('/login', async (req, res) => {
       if (!user.deviceIdBound) {
         user.deviceIdBound = deviceId;
         user.deviceBoundAt = new Date();
-        user.deviceHistory.push({ deviceId, action: 'BOUND', by: 'system' });
+        if (!Array.isArray(user.deviceHistory)) user.deviceHistory = [];
+        user.deviceHistory.push({
+          deviceId,
+          action: 'BOUND',
+          by: 'system',
+        });
         await user.save();
       } else if (user.deviceIdBound !== deviceId) {
         return res.status(423).json({
@@ -80,8 +91,10 @@ router.post('/login', async (req, res) => {
       }
     }
 
-    // NEW: Decide active database for this session
-    const allowed = Array.isArray(user.allowedDatabaseIds) ? user.allowedDatabaseIds : [];
+    // Decide active database for this session
+    const allowed = Array.isArray(user.allowedDatabaseIds)
+      ? user.allowedDatabaseIds
+      : [];
     let activeDatabaseId = null;
 
     if (allowed.length === 1) {
@@ -91,19 +104,19 @@ router.post('/login', async (req, res) => {
       activeDatabaseId = allowed[0];
     }
 
-    // NEW: Provide databases list (filtered to allowed)
+    // Provide databases list (filtered to allowed)
     let databases = [];
     try {
       const all = await listVoterDatabases(); // [{ id, name }, ...]
       if (Array.isArray(all) && all.length) {
         const allowedSet = new Set(allowed);
-        databases = all.filter(d => allowedSet.has(d.id));
+        databases = all.filter((d) => allowedSet.has(d.id));
       } else {
         // Fallback: synthesize labels from allowed ids
-        databases = allowed.map(id => ({ id, name: id }));
+        databases = allowed.map((id) => ({ id, name: id }));
       }
     } catch {
-      databases = allowed.map(id => ({ id, name: id }));
+      databases = allowed.map((id) => ({ id, name: id }));
     }
 
     // Token payload
@@ -113,12 +126,16 @@ router.post('/login', async (req, res) => {
       username: user.username || null,
       allowedDatabaseIds: allowed,
       deviceIdBound: user.deviceIdBound || null,
+      // optional: we *can* include avatarUrl here if you want it in token
+      avatarUrl: user.avatarUrl || null,
     };
     if (deviceId) payload.deviceId = deviceId;
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: '7d',
+    });
 
-    // Respond with activeDatabaseId + databases for the client to start pulling voters
+    // Respond with user info (including avatarUrl) + DB info
     res.json({
       token,
       user: {
@@ -128,9 +145,10 @@ router.post('/login', async (req, res) => {
         deviceIdBound: user.deviceIdBound || null,
         deviceBoundAt: user.deviceBoundAt || null,
         allowedDatabaseIds: allowed,
+        avatarUrl: user.avatarUrl || null, // 👈 IMPORTANT for Home.jsx avatar
       },
-      activeDatabaseId,   // 👈 important
-      databases,          // 👈 useful for UI
+      activeDatabaseId, // 👈 client uses this to choose DB
+      databases, // 👈 for UI display
     });
   } catch (e) {
     console.error('LOGIN_ERROR', e);
