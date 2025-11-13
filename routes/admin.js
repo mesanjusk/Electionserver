@@ -17,7 +17,16 @@ function serializeUser(user) {
     _id: plain._id,
     username: plain.username || '',
     role: plain.role || 'user',
-    allowedDatabaseIds: Array.isArray(plain.allowedDatabaseIds) ? plain.allowedDatabaseIds : [],
+    allowedDatabaseIds: Array.isArray(plain.allowedDatabaseIds)
+      ? plain.allowedDatabaseIds
+      : [],
+    // 👇 NEW: include avatar + device info in API responses
+    avatarUrl: plain.avatarUrl || null,
+    deviceIdBound: plain.deviceIdBound || null,
+    deviceBoundAt: plain.deviceBoundAt || null,
+    deviceHistory: Array.isArray(plain.deviceHistory)
+      ? plain.deviceHistory
+      : [],
     createdAt: plain.createdAt || null,
     updatedAt: plain.updatedAt || null,
   };
@@ -38,8 +47,12 @@ router.get('/databases', auth, requireRole('admin'), async (_req, res) => {
 /** List users (lightweight) */
 router.get('/users', auth, requireRole('admin'), async (_req, res) => {
   try {
-    const users = await User.find({}, 'username role allowedDatabaseIds createdAt updatedAt')
-      .sort({ createdAt: -1 });
+    const users = await User.find(
+      {},
+      // 👇 include avatar + device fields so AdminUsers.jsx can show them
+      'username role allowedDatabaseIds avatarUrl deviceIdBound deviceBoundAt deviceHistory createdAt updatedAt'
+    ).sort({ createdAt: -1 });
+
     res.json({ users: users.map(serializeUser) });
   } catch (e) {
     console.error('ADMIN_LIST_USERS_ERROR', e);
@@ -55,17 +68,22 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
       password,
       role = 'user',
       allowedDatabaseIds = [],
+      avatarUrl, // 👈 NEW: take Cloudinary URL from frontend
     } = req.body || {};
 
-    const normalizedUsername = typeof username === 'string' ? username.trim() : '';
+    const normalizedUsername =
+      typeof username === 'string' ? username.trim() : '';
     if (!normalizedUsername) {
       return res.status(400).json({ error: 'Username is required.' });
     }
     if (!password || typeof password !== 'string' || password.length < 4) {
-      return res.status(400).json({ error: 'Password must be at least 4 characters long.' });
+      return res
+        .status(400)
+        .json({ error: 'Password must be at least 4 characters long.' });
     }
 
-    const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : 'user';
+    const normalizedRole =
+      typeof role === 'string' ? role.trim().toLowerCase() : 'user';
     const roleAlias = normalizedRole === 'volunteer' ? 'operator' : normalizedRole;
     const allowedRoles = ['admin', 'operator', 'candidate', 'user'];
     if (!allowedRoles.includes(roleAlias)) {
@@ -73,7 +91,9 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
     }
 
     // Prevent duplicate usernames
-    const existingUser = await User.findOne({ username: normalizedUsername });
+    const existingUser = await User.findOne({
+      username: normalizedUsername,
+    });
     if (existingUser) {
       return res.status(409).json({ error: 'Username already exists' });
     }
@@ -83,15 +103,19 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
     if (Array.isArray(allowedDatabaseIds) && allowedDatabaseIds.length > 0) {
       try {
         const available = await listVoterDatabases();
-        const validIds = new Set(available.map(db => db.id));
-        finalAllowed = Array.from(new Set(
-          allowedDatabaseIds
-            .map(id => (typeof id === 'string' ? id.trim() : ''))
-            .filter(id => id && validIds.has(id))
-        ));
+        const validIds = new Set(available.map((db) => db.id));
+        finalAllowed = Array.from(
+          new Set(
+            allowedDatabaseIds
+              .map((id) => (typeof id === 'string' ? id.trim() : ''))
+              .filter((id) => id && validIds.has(id))
+          )
+        );
       } catch {
         // If listing fails, just keep the provided values (deduped + truthy)
-        finalAllowed = Array.from(new Set(allowedDatabaseIds.filter(Boolean)));
+        finalAllowed = Array.from(
+          new Set(allowedDatabaseIds.filter(Boolean))
+        );
       }
     }
 
@@ -101,6 +125,7 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
       passwordHash,
       role: roleAlias,
       allowedDatabaseIds: finalAllowed,
+      avatarUrl: avatarUrl || null, // 👈 save Cloudinary URL on user
     });
 
     res.status(201).json({ user: serializeUser(user) });
@@ -113,7 +138,8 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
     }
 
     if (e?.name === 'ValidationError') {
-      const message = typeof e?.message === 'string' ? e.message : 'Validation failed';
+      const message =
+        typeof e?.message === 'string' ? e.message : 'Validation failed';
       return res.status(400).json({ error: message });
     }
 
@@ -126,7 +152,9 @@ router.delete('/users/:id', auth, requireRole('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     if (String(req.user?.id) === String(id)) {
-      return res.status(400).json({ error: 'You cannot delete your own account' });
+      return res
+        .status(400)
+        .json({ error: 'You cannot delete your own account' });
     }
     const doc = await User.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ error: 'User not found' });
@@ -142,19 +170,28 @@ router.patch('/users/:id/role', auth, requireRole('admin'), async (req, res) => 
   try {
     const { id } = req.params;
     const { role } = req.body || {};
-    const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : '';
+    const normalizedRole =
+      typeof role === 'string' ? role.trim().toLowerCase() : '';
     const roleAlias = normalizedRole === 'volunteer' ? 'operator' : normalizedRole;
     const allowedRoles = ['admin', 'operator', 'candidate', 'user'];
-    if (!allowedRoles.includes(roleAlias)) return res.status(400).json({ error: 'Invalid role' });
+    if (!allowedRoles.includes(roleAlias))
+      return res.status(400).json({ error: 'Invalid role' });
 
-    if (String(req.user?.id) === String(id) && req.user.role !== roleAlias) {
+    if (
+      String(req.user?.id) === String(id) &&
+      req.user.role !== roleAlias
+    ) {
       return res.status(400).json({ error: 'You cannot change your own role' });
     }
 
     const user = await User.findByIdAndUpdate(
       id,
       { role: roleAlias },
-      { new: true, projection: 'username role allowedDatabaseIds' }
+      {
+        new: true,
+        projection:
+          'username role allowedDatabaseIds avatarUrl deviceIdBound deviceBoundAt deviceHistory',
+      }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ user: serializeUser(user) });
@@ -165,57 +202,77 @@ router.patch('/users/:id/role', auth, requireRole('admin'), async (req, res) => 
 });
 
 /** Update password */
-router.patch('/users/:id/password', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { password = '' } = req.body || {};
-    if (!password || typeof password !== 'string' || password.length < 4) {
-      return res.status(400).json({ error: 'Password must be at least 4 characters long.' });
+router.patch(
+  '/users/:id/password',
+  auth,
+  requireRole('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { password = '' } = req.body || {};
+      if (!password || typeof password !== 'string' || password.length < 4) {
+        return res.status(400).json({
+          error: 'Password must be at least 4 characters long.',
+        });
+      }
+      const passwordHash = await bcrypt.hash(password, 10);
+      const user = await User.findByIdAndUpdate(
+        id,
+        { passwordHash },
+        {
+          new: true,
+          projection:
+            'username role allowedDatabaseIds avatarUrl deviceIdBound deviceBoundAt deviceHistory',
+        }
+      );
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('ADMIN_UPDATE_PASSWORD_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
     }
-    const passwordHash = await bcrypt.hash(password, 10);
-    const user = await User.findByIdAndUpdate(
-      id,
-      { passwordHash },
-      { new: true, projection: 'username role allowedDatabaseIds' }
-    );
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('ADMIN_UPDATE_PASSWORD_ERROR', e);
-    res.status(500).json({ error: 'Server error' });
   }
-});
+);
 
 /** Update allowed DB access */
-router.patch('/users/:id/databases', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    let { allowedDatabaseIds = [] } = req.body || {};
-    if (!Array.isArray(allowedDatabaseIds)) allowedDatabaseIds = [];
-
-    // Best-effort validation
+router.patch(
+  '/users/:id/databases',
+  auth,
+  requireRole('admin'),
+  async (req, res) => {
     try {
-      const available = await listVoterDatabases();
-      const validIds = new Set(available.map(db => db.id));
-      allowedDatabaseIds = allowedDatabaseIds
-        .map(v => (typeof v === 'string' ? v.trim() : ''))
-        .filter(v => v && validIds.has(v));
-    } catch {
-      // keep as-is on failure
-    }
+      const { id } = req.params;
+      let { allowedDatabaseIds = [] } = req.body || {};
+      if (!Array.isArray(allowedDatabaseIds)) allowedDatabaseIds = [];
 
-    const user = await User.findByIdAndUpdate(
-      id,
-      { allowedDatabaseIds },
-      { new: true, projection: 'username role allowedDatabaseIds' }
-    );
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ user: serializeUser(user) });
-  } catch (e) {
-    console.error('ADMIN_UPDATE_DATABASES_ERROR', e);
-    res.status(500).json({ error: 'Server error' });
+      // Best-effort validation
+      try {
+        const available = await listVoterDatabases();
+        const validIds = new Set(available.map((db) => db.id));
+        allowedDatabaseIds = allowedDatabaseIds
+          .map((v) => (typeof v === 'string' ? v.trim() : ''))
+          .filter((v) => v && validIds.has(v));
+      } catch {
+        // keep as-is on failure
+      }
+
+      const user = await User.findByIdAndUpdate(
+        id,
+        { allowedDatabaseIds },
+        {
+          new: true,
+          projection:
+            'username role allowedDatabaseIds avatarUrl deviceIdBound deviceBoundAt deviceHistory',
+        }
+      );
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      res.json({ user: serializeUser(user) });
+    } catch (e) {
+      console.error('ADMIN_UPDATE_DATABASES_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
+    }
   }
-});
+);
 
 /** Combined PUT (role + DBs in one call) */
 router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
@@ -232,16 +289,18 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
       return res.status(400).json({ error: 'Invalid role' });
     }
 
-    let finalDbIds = Array.isArray(allowedDatabaseIds) ? allowedDatabaseIds : databaseIds;
+    let finalDbIds = Array.isArray(allowedDatabaseIds)
+      ? allowedDatabaseIds
+      : databaseIds;
     if (!Array.isArray(finalDbIds)) finalDbIds = [];
 
     // Best-effort validation
     try {
       const available = await listVoterDatabases();
-      const valid = new Set(available.map(d => d.id));
+      const valid = new Set(available.map((d) => d.id));
       finalDbIds = finalDbIds
-        .map(v => (typeof v === 'string' ? v.trim() : ''))
-        .filter(v => v && valid.has(v));
+        .map((v) => (typeof v === 'string' ? v.trim() : ''))
+        .filter((v) => v && valid.has(v));
     } catch {
       // keep as-is
     }
@@ -249,7 +308,11 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
     const user = await User.findByIdAndUpdate(
       id,
       { $set: { role, allowedDatabaseIds: finalDbIds } },
-      { new: true, projection: 'username role allowedDatabaseIds' }
+      {
+        new: true,
+        projection:
+          'username role allowedDatabaseIds avatarUrl deviceIdBound deviceBoundAt deviceHistory',
+      }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -266,26 +329,36 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
-
 /** Reset device binding for a user (useful for candidate re-activation) */
-router.patch('/users/:id/reset-device', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const user = await User.findById(id);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    user.deviceIdBound = null;
-    user.deviceBoundAt = null;
-    if (Array.isArray(user.deviceHistory)) {
-      user.deviceHistory.push({ action: 'RESET', by: req.user?.id || 'admin' });
-    } else {
-      user.deviceHistory = [{ action: 'RESET', by: req.user?.id || 'admin' }];
+router.patch(
+  '/users/:id/reset-device',
+  auth,
+  requireRole('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = await User.findById(id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
+      user.deviceIdBound = null;
+      user.deviceBoundAt = null;
+      if (Array.isArray(user.deviceHistory)) {
+        user.deviceHistory.push({
+          action: 'RESET',
+          by: req.user?.id || 'admin',
+        });
+      } else {
+        user.deviceHistory = [
+          { action: 'RESET', by: req.user?.id || 'admin' },
+        ];
+      }
+      await user.save();
+      res.json({ user: serializeUser(user) });
+    } catch (e) {
+      console.error('ADMIN_RESET_DEVICE_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
     }
-    await user.save();
-    res.json({ user: serializeUser(user) });
-  } catch (e) {
-    console.error('ADMIN_RESET_DEVICE_ERROR', e);
-    res.status(500).json({ error: 'Server error' });
   }
-});
+);
 
 export default router;
