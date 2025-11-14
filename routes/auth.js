@@ -40,10 +40,9 @@ router.post('/login', async (req, res) => {
     }
 
     // Username lookup (case-insensitive)
-    const user = await User.findOne({ username: usernameCandidate }).collation({
-      locale: 'en',
-      strength: 2,
-    });
+    const user = await User.findOne({ username: usernameCandidate }).collation(
+      { locale: 'en', strength: 2 }
+    );
     if (!user) return res.status(400).json({ error: 'Invalid credentials' });
 
     const ok = await bcrypt.compare(password, user.passwordHash);
@@ -54,7 +53,8 @@ router.post('/login', async (req, res) => {
       const normalizedType = String(userType).toLowerCase();
       let expectedRoles;
       if (normalizedType === 'volunteer') {
-        expectedRoles = new Set(['user', 'operator']);
+        // ✅ volunteers must be actual 'volunteer' role
+        expectedRoles = new Set(['volunteer']);
       } else if (normalizedType) {
         expectedRoles = new Set([normalizedType]);
       }
@@ -74,7 +74,6 @@ router.post('/login', async (req, res) => {
       if (!user.deviceIdBound) {
         user.deviceIdBound = deviceId;
         user.deviceBoundAt = new Date();
-        if (!Array.isArray(user.deviceHistory)) user.deviceHistory = [];
         user.deviceHistory.push({
           deviceId,
           action: 'BOUND',
@@ -126,8 +125,6 @@ router.post('/login', async (req, res) => {
       username: user.username || null,
       allowedDatabaseIds: allowed,
       deviceIdBound: user.deviceIdBound || null,
-      // optional: we *can* include avatarUrl here if you want it in token
-      avatarUrl: user.avatarUrl || null,
     };
     if (deviceId) payload.deviceId = deviceId;
 
@@ -135,7 +132,7 @@ router.post('/login', async (req, res) => {
       expiresIn: '7d',
     });
 
-    // Respond with user info (including avatarUrl) + DB info
+    // Respond with activeDatabaseId + databases for the client
     res.json({
       token,
       user: {
@@ -145,10 +142,12 @@ router.post('/login', async (req, res) => {
         deviceIdBound: user.deviceIdBound || null,
         deviceBoundAt: user.deviceBoundAt || null,
         allowedDatabaseIds: allowed,
-        avatarUrl: user.avatarUrl || null, // 👈 IMPORTANT for Home.jsx avatar
+        avatarUrl: user.avatarUrl || null, // ✅ useful later
+        parentUserId: user.parentUserId || null,
+        parentUsername: user.parentUsername || '',
       },
-      activeDatabaseId, // 👈 client uses this to choose DB
-      databases, // 👈 for UI display
+      activeDatabaseId,
+      databases,
     });
   } catch (e) {
     console.error('LOGIN_ERROR', e);

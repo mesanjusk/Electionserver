@@ -6,15 +6,17 @@ const UserSchema = new mongoose.Schema(
     username: {
       type: String,
       required: true,
-      unique: true,     // ✅ keep this
+      unique: true, // ✅ keep unique
       trim: true,
       lowercase: true,
     },
+
     passwordHash: { type: String, required: true },
 
+    // ✅ now includes 'volunteer'
     role: {
       type: String,
-      enum: ['user', 'operator', 'candidate', 'admin'],
+      enum: ['user', 'operator', 'candidate', 'volunteer', 'admin'],
       default: 'user',
       required: true,
     },
@@ -23,13 +25,33 @@ const UserSchema = new mongoose.Schema(
 
     allowedDatabaseIds: { type: [String], default: [] },
 
-    // 👇 NEW: Cloudinary image URL for this user
+    // ✅ Avatar image URL (Cloudinary)
     avatarUrl: {
       type: String,
+      trim: true,
       default: null,
     },
 
-    // (optional) candidate device binding fields if you use them
+    // ✅ How many volunteer logins this user is allowed to have
+    maxVolunteers: {
+      type: Number,
+      default: 0, // 0 = no volunteers allowed
+      min: 0,
+    },
+
+    // ✅ For volunteer accounts: link to parent user
+    parentUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    parentUsername: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+
+    // ✅ candidate / user device binding
     deviceIdBound: { type: String, default: null },
     deviceBoundAt: { type: Date, default: null },
     deviceHistory: {
@@ -47,6 +69,8 @@ const UserSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// ⛔ DO NOT re-add any extra index here, `unique: true` on username is enough
+// ⛔ If you still have any extra unique index lines for username, remove them.
+// Example (DO NOT KEEP):
+// UserSchema.index({ username: 1 }, { unique: true });
 
 export default mongoose.model('User', UserSchema);
