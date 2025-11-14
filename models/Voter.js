@@ -40,10 +40,11 @@ function getTargetDbName(connection = mongoose.connection) {
 const modelCache = new Map();
 
 function makeModelName(collectionName) {
-  const safe = String(collectionName)
-    .trim()
-    .replace(/[^A-Za-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '') || 'Default';
+  const safe =
+    String(collectionName)
+      .trim()
+      .replace(/[^A-Za-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'Default';
   return `Voter_${safe}`;
 }
 
@@ -79,13 +80,17 @@ export function getVoterModel(collectionName) {
   return model;
 }
 
+/**
+ * List all voter collections (DBs).
+ */
 export async function listVoterDatabases() {
   const connection = mongoose.connection;
   if (!connection) return [];
 
-  const client = typeof connection.getClient === 'function'
-    ? connection.getClient()
-    : connection.client;
+  const client =
+    typeof connection.getClient === 'function'
+      ? connection.getClient()
+      : connection.client;
 
   if (!client) return [];
 
@@ -94,15 +99,15 @@ export async function listVoterDatabases() {
   const collections = await db.listCollections().toArray();
 
   return collections
-    .filter(col => !col.name.startsWith('system.'))
-    .map(col => {
+    .filter((col) => !col.name.startsWith('system.'))
+    .map((col) => {
       const pretty = String(col.name)
         .replace(/[_-]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
         .split(' ')
         .filter(Boolean)
-        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join(' ');
 
       return {
@@ -114,6 +119,65 @@ export async function listVoterDatabases() {
         type: col.type || 'collection',
       };
     });
+}
+
+/**
+ * Clone a voter collection into a new collection (one-time copy).
+ * Used when creating per-user private DBs.
+ */
+export async function cloneVoterCollection(sourceCollectionName, targetCollectionName) {
+  const connection = mongoose.connection;
+  if (!connection) throw new Error('MongoDB connection is not ready');
+
+  const client =
+    typeof connection.getClient === 'function'
+      ? connection.getClient()
+      : connection.client;
+  if (!client) throw new Error('MongoDB client not available');
+
+  const dbName = getTargetDbName(connection);
+  const db = client.db(dbName);
+
+  const targetExists = await db
+    .listCollections({ name: targetCollectionName })
+    .toArray();
+  if (targetExists.length) {
+    // Already exists – do nothing
+    return;
+  }
+
+  // Server-side copy using $out (no large data in Node memory)
+  await db
+    .collection(sourceCollectionName)
+    .aggregate([{ $match: {} }, { $out: targetCollectionName }])
+    .toArray();
+}
+
+/**
+ * Drop a voter collection (used when deleting a user & their private DBs).
+ */
+export async function dropVoterCollection(collectionName) {
+  const connection = mongoose.connection;
+  if (!connection) throw new Error('MongoDB connection is not ready');
+
+  const client =
+    typeof connection.getClient === 'function'
+      ? connection.getClient()
+      : connection.client;
+  if (!client) throw new Error('MongoDB client not available');
+
+  const dbName = getTargetDbName(connection);
+  const db = client.db(dbName);
+
+  const exists = await db
+    .listCollections({ name: collectionName })
+    .toArray();
+  if (!exists.length) return;
+
+  await db.collection(collectionName).drop().catch((e) => {
+    // ignore "ns not found" etc
+    console.error('DROP_VOTER_COLLECTION_ERROR', collectionName, e.message);
+  });
 }
 
 // Maintain backward compatibility for legacy imports that expect a default export.

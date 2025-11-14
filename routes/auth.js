@@ -6,7 +6,7 @@ import User from '../models/User.js';
 import { getDeviceIdFromHeaders } from '../lib/deviceId.js';
 
 /**
- * Optional helper to list all voter DBs with labels.
+ * Optional helper to list voter DBs with labels.
  * If you already have something like this elsewhere, import that instead.
  * Must return: [{ id: 'collection_name', name: 'Readable Label' }, ...]
  */
@@ -33,7 +33,7 @@ router.post('/login', async (req, res) => {
     // Basic checks
     const usernameCandidate =
       typeof username === 'string' && username.trim()
-        ? username.trim()
+        ? username.trim().toLowerCase()
         : '';
     if (!usernameCandidate || !password || typeof password !== 'string') {
       return res.status(400).json({ error: 'Missing credentials' });
@@ -44,6 +44,11 @@ router.post('/login', async (req, res) => {
       { locale: 'en', strength: 2 }
     );
     if (!user) return res.status(400).json({ error: 'Invalid credentials' });
+
+    // ❌ Block disabled users
+    if (user.enabled === false) {
+      return res.status(403).json({ error: 'User disabled by admin' });
+    }
 
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(400).json({ error: 'Invalid credentials' });
@@ -145,6 +150,7 @@ router.post('/login', async (req, res) => {
         avatarUrl: user.avatarUrl || null, // ✅ useful later
         parentUserId: user.parentUserId || null,
         parentUsername: user.parentUsername || '',
+        enabled: user.enabled !== false,
       },
       activeDatabaseId,
       databases,

@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
 import { auth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/roles.js';
-import { listVoterDatabases } from '../lib/voterDatabases.js';
+import { listVoterDatabases, cloneVoterCollection, dropVoterCollection } from '../models/Voter.js';
 
 const router = Router();
 
@@ -34,6 +34,8 @@ function serializeUser(user, overrides = {}) {
     parentUsername: plain.parentUsername || '',
     deviceIdBound: plain.deviceIdBound || null,
     deviceBoundAt: plain.deviceBoundAt || null,
+    enabled:
+      typeof plain.enabled === 'boolean' ? plain.enabled : true,
 
     // will be overridden by list route
     volunteerCount:
@@ -43,11 +45,16 @@ function serializeUser(user, overrides = {}) {
   return { ...base, ...overrides };
 }
 
-/** Get list of voter DBs to assign */
+/** Get list of voter DBs to assign (only master DBs, no per-user clones) */
 router.get('/databases', auth, requireRole('admin'), async (_req, res) => {
   try {
     const databases = await listVoterDatabases(); // [{ id, name }]
-    res.json({ databases });
+    // Filter out per-user cloned DBs (we name them "u_<userId>_<master>")
+    const filtered = databases.filter((db) => {
+      const id = String(db.id || db.collection || '');
+      return !id.startsWith('u_');
+    });
+    res.json({ databases: filtered });
   } catch (e) {
     console.error('ADMIN_DATABASES_ERROR', e);
     // return an empty array instead of 500 to avoid blocking the UI
@@ -55,13 +62,13 @@ router.get('/databases', auth, requireRole('admin'), async (_req, res) => {
   }
 });
 
-/** List users (with volunteer counts, avatars, device info) */
+/** List users (with volunteer counts, avatars, device info, enabled flag) */
 router.get('/users', auth, requireRole('admin'), async (_req, res) => {
   try {
     // Base user docs
     const users = await User.find(
       {},
-      'username role allowedDatabaseIds createdAt updatedAt avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt'
+      'username role allowedDatabaseIds createdAt updatedAt avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled'
     ).sort({ createdAt: -1 });
 
     // Compute volunteer counts: how many users reference each parentUserId
@@ -88,7 +95,7 @@ router.get('/users', auth, requireRole('admin'), async (_req, res) => {
   }
 });
 
-/** Create user (username required; role; allowed DBs; avatar; volunteers) */
+/** Create user (username required; role; allowed DBs; avatar; volunteers; per-user DBs) */
 router.post('/users', auth, requireRole('admin'), async (req, res) => {
   try {
     const {
@@ -124,19 +131,19 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
 
     // Prevent duplicate usernames
     const existingUser = await User.findOne({
-      username: normalizedUsername,
+      username: normalizedUsername.toLowerCase(),
     });
     if (existingUser) {
       return res.status(409).json({ error: 'Username already exists' });
     }
 
-    // Validate DB IDs against available list (best-effort)
-    let finalAllowed = [];
+    // Validate DB IDs (best-effort)
+    let requestedDbIds = [];
     if (Array.isArray(allowedDatabaseIds) && allowedDatabaseIds.length > 0) {
       try {
         const available = await listVoterDatabases();
         const validIds = new Set(available.map((db) => db.id));
-        finalAllowed = Array.from(
+        requestedDbIds = Array.from(
           new Set(
             allowedDatabaseIds
               .map((id) =>
@@ -146,9 +153,14 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
           )
         );
       } catch {
-        // If listing fails, just keep the provided values (deduped + truthy)
-        finalAllowed = Array.from(
-          new Set(allowedDatabaseIds.filter(Boolean))
+        requestedDbIds = Array.from(
+          new Set(
+            allowedDatabaseIds
+              .map((id) =>
+                typeof id === 'string' ? id.trim() : ''
+              )
+              .filter(Boolean)
+          )
         );
       }
     }
@@ -201,21 +213,61 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
+
+    // 🔹 VOLUNTEER: inherit parent's already-cloned DBs as-is
+    if (normalizedRole === 'volunteer') {
+      const user = await User.create({
+        username: normalizedUsername.toLowerCase(),
+        passwordHash,
+        role: normalizedRole,
+        allowedDatabaseIds: requestedDbIds, // these are cloned DB IDs from parent
+        avatarUrl: avatarUrl || null,
+        maxVolunteers: 0,
+        parentUserId: finalParentUserId,
+        parentUsername: finalParentUsername,
+      });
+
+      return res.status(201).json({ user: serializeUser(user) });
+    }
+
+    // 🔹 NON-VOLUNTEER (candidate/user/operator/admin):
+    // Create the user first with no DBs, then clone master DBs into per-user DBs.
     const user = await User.create({
-      username: normalizedUsername,
+      username: normalizedUsername.toLowerCase(),
       passwordHash,
       role: normalizedRole,
-      allowedDatabaseIds: finalAllowed,
+      allowedDatabaseIds: [],
       avatarUrl: avatarUrl || null,
-      maxVolunteers:
-        normalizedRole === 'volunteer'
-          ? 0
-          : parsedMaxVolunteers,
+      maxVolunteers: parsedMaxVolunteers,
       parentUserId: finalParentUserId,
       parentUsername: finalParentUsername,
+      enabled: true,
     });
 
-    res.status(201).json({ user: serializeUser(user) });
+    const clonedDbIds = [];
+
+    for (const masterId of requestedDbIds) {
+      const targetId = `u_${user._id}_${masterId}`;
+      try {
+        await cloneVoterCollection(masterId, targetId);
+        clonedDbIds.push(targetId);
+      } catch (err) {
+        console.error(
+          'CLONE_VOTER_COLLECTION_ERROR',
+          masterId,
+          '->',
+          targetId,
+          err.message
+        );
+      }
+    }
+
+    if (clonedDbIds.length) {
+      user.allowedDatabaseIds = clonedDbIds;
+      await user.save();
+    }
+
+    return res.status(201).json({ user: serializeUser(user) });
   } catch (e) {
     console.error('ADMIN_CREATE_USER_ERROR', e);
 
@@ -236,17 +288,42 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
-/** Delete user */
+/** Delete user + their volunteers + their private DBs */
 router.delete('/users/:id', auth, requireRole('admin'), async (req, res) => {
   try {
     const { id } = req.params;
+
     if (String(req.user?.id) === String(id)) {
       return res
         .status(400)
         .json({ error: 'You cannot delete your own account' });
     }
-    const doc = await User.findByIdAndDelete(id);
-    if (!doc) return res.status(404).json({ error: 'User not found' });
+
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // If this is a PARENT (non-volunteer), drop their cloned DBs and delete volunteers
+    if (user.role !== 'volunteer') {
+      const clonedDbIds = Array.isArray(user.allowedDatabaseIds)
+        ? user.allowedDatabaseIds
+        : [];
+
+      // Delete volunteers first
+      await User.deleteMany({ parentUserId: user._id });
+
+      // Drop per-user voter collections
+      for (const col of clonedDbIds) {
+        if (!col) continue;
+        try {
+          await dropVoterCollection(col);
+        } catch (err) {
+          console.error('DROP_USER_DB_ERROR', col, err.message);
+        }
+      }
+    }
+
+    await User.findByIdAndDelete(user._id);
+
     res.json({ ok: true });
   } catch (e) {
     console.error('ADMIN_DELETE_USER_ERROR', e);
@@ -281,7 +358,7 @@ router.patch('/users/:id/role', auth, requireRole('admin'), async (req, res) => 
       {
         new: true,
         projection:
-          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt',
+          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
       }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -315,7 +392,7 @@ router.patch('/users/:id/password', auth, requireRole('admin'), async (req, res)
       {
         new: true,
         projection:
-          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt',
+          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
       }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -326,14 +403,14 @@ router.patch('/users/:id/password', auth, requireRole('admin'), async (req, res)
   }
 });
 
-/** Update allowed DB access */
+/** Update allowed DB access (for existing per-user DBs – no cloning here) */
 router.patch('/users/:id/databases', auth, requireRole('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     let { allowedDatabaseIds = [] } = req.body || {};
     if (!Array.isArray(allowedDatabaseIds)) allowedDatabaseIds = [];
 
-    // Best-effort validation
+    // Best-effort validation: any existing collection is allowed
     try {
       const available = await listVoterDatabases();
       const validIds = new Set(available.map((db) => db.id));
@@ -350,7 +427,7 @@ router.patch('/users/:id/databases', auth, requireRole('admin'), async (req, res
       {
         new: true,
         projection:
-          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt',
+          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
       }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -408,7 +485,7 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
       {
         new: true,
         projection:
-          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt',
+          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
       }
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -459,6 +536,45 @@ router.patch('/users/:id/reset-device', auth, requireRole('admin'), async (req, 
     });
   } catch (e) {
     console.error('ADMIN_RESET_DEVICE_ERROR', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/** Enable / disable a user (and all their volunteers) */
+router.patch('/users/:id/enabled', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { enabled } = req.body || {};
+    const flag = !!enabled;
+
+    // Prevent disabling your own admin account (optional safeguard)
+    if (String(req.user?.id) === String(id) && !flag) {
+      return res
+        .status(400)
+        .json({ error: 'You cannot disable your own account' });
+    }
+
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    user.enabled = flag;
+    await user.save();
+
+    // If this is a parent, propagate enabled flag to its volunteers
+    if (user.role !== 'volunteer') {
+      await User.updateMany(
+        { parentUserId: user._id },
+        { $set: { enabled: flag } }
+      );
+    }
+
+    const used = await User.countDocuments({ parentUserId: user._id });
+
+    res.json({
+      user: serializeUser(user, { volunteerCount: used }),
+    });
+  } catch (e) {
+    console.error('ADMIN_ENABLE_USER_ERROR', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

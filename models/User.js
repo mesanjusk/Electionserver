@@ -65,6 +65,12 @@ const UserSchema = new mongoose.Schema(
       ],
       default: [],
     },
+
+    // ✅ enable / disable user & all their volunteers
+    enabled: {
+      type: Boolean,
+      default: true, // false = cannot login
+    },
   },
   { timestamps: true }
 );
