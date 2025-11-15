@@ -4,7 +4,11 @@ import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
 import { auth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/roles.js';
-import { listVoterDatabases, cloneVoterCollection, dropVoterCollection } from '../models/Voter.js';
+import {
+  listVoterDatabases,
+  cloneVoterCollection,
+  dropVoterCollection,
+} from '../models/Voter.js';
 
 const router = Router();
 
@@ -46,21 +50,26 @@ function serializeUser(user, overrides = {}) {
 }
 
 /** Get list of voter DBs to assign (only master DBs, no per-user clones) */
-router.get('/databases', auth, requireRole('admin'), async (_req, res) => {
-  try {
-    const databases = await listVoterDatabases(); // [{ id, name }]
-    // Filter out per-user cloned DBs (we name them "u_<userId>_<master>")
-    const filtered = databases.filter((db) => {
-      const id = String(db.id || db.collection || '');
-      return !id.startsWith('u_');
-    });
-    res.json({ databases: filtered });
-  } catch (e) {
-    console.error('ADMIN_DATABASES_ERROR', e);
-    // return an empty array instead of 500 to avoid blocking the UI
-    res.json({ databases: [] });
+router.get(
+  '/databases',
+  auth,
+  requireRole('admin'),
+  async (_req, res) => {
+    try {
+      const databases = await listVoterDatabases(); // [{ id, name }]
+      // Filter out per-user cloned DBs (we name them "u_<userKey>_<master>")
+      const filtered = databases.filter((db) => {
+        const id = String(db.id || db.collection || '');
+        return !id.startsWith('u_');
+      });
+      res.json({ databases: filtered });
+    } catch (e) {
+      console.error('ADMIN_DATABASES_ERROR', e);
+      // return an empty array instead of 500 to avoid blocking the UI
+      res.json({ databases: [] });
+    }
   }
-});
+);
 
 /** List users (with volunteer counts, avatars, device info, enabled flag) */
 router.get('/users', auth, requireRole('admin'), async (_req, res) => {
@@ -112,19 +121,23 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
     const normalizedUsername =
       typeof username === 'string' ? username.trim() : '';
     if (!normalizedUsername) {
-      return res
-        .status(400)
-        .json({ error: 'Username is required.' });
+      return res.status(400).json({ error: 'Username is required.' });
     }
     if (!password || typeof password !== 'string' || password.length < 4) {
-      return res
-        .status(400)
-        .json({ error: 'Password must be at least 4 characters long.' });
+      return res.status(400).json({
+        error: 'Password must be at least 4 characters long.',
+      });
     }
 
     const normalizedRole =
       typeof role === 'string' ? role.trim().toLowerCase() : 'user';
-    const allowedRoles = ['admin', 'operator', 'candidate', 'user', 'volunteer'];
+    const allowedRoles = [
+      'admin',
+      'operator',
+      'candidate',
+      'user',
+      'volunteer',
+    ];
     if (!allowedRoles.includes(normalizedRole)) {
       return res.status(400).json({ error: 'Invalid role' });
     }
@@ -139,7 +152,10 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
 
     // Validate DB IDs (best-effort)
     let requestedDbIds = [];
-    if (Array.isArray(allowedDatabaseIds) && allowedDatabaseIds.length > 0) {
+    if (
+      Array.isArray(allowedDatabaseIds) &&
+      allowedDatabaseIds.length > 0
+    ) {
       try {
         const available = await listVoterDatabases();
         const validIds = new Set(available.map((db) => db.id));
@@ -208,8 +224,7 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
       }
 
       finalParentUserId = parent._id;
-      finalParentUsername =
-        parentUsername || parent.username || '';
+      finalParentUsername = parentUsername || parent.username || '';
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
@@ -246,8 +261,19 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
 
     const clonedDbIds = [];
 
+    // 👉 use username instead of raw Mongo _id in cloned DB id
+    const rawKey = user.username || user._id;
+    const safeKey =
+      String(rawKey)
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, '') || String(user._id);
+
     for (const masterId of requestedDbIds) {
-      const targetId = `u_${user._id}_${masterId}`;
+      const cleanMaster =
+        typeof masterId === 'string'
+          ? masterId.replace(/\s+/g, '')
+          : String(masterId);
+      const targetId = `u_${safeKey}_${cleanMaster}`;
       try {
         await cloneVoterCollection(masterId, targetId);
         clonedDbIds.push(targetId);
@@ -289,159 +315,197 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
 });
 
 /** Delete user + their volunteers + their private DBs */
-router.delete('/users/:id', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { id } = req.params;
+router.delete(
+  '/users/:id',
+  auth,
+  requireRole('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
 
-    if (String(req.user?.id) === String(id)) {
-      return res
-        .status(400)
-        .json({ error: 'You cannot delete your own account' });
-    }
+      if (String(req.user?.id) === String(id)) {
+        return res
+          .status(400)
+          .json({ error: 'You cannot delete your own account' });
+      }
 
-    const user = await User.findById(id);
-    if (!user) return res.status(404).json({ error: 'User not found' });
+      const user = await User.findById(id);
+      if (!user)
+        return res.status(404).json({ error: 'User not found' });
 
-    // If this is a PARENT (non-volunteer), drop their cloned DBs and delete volunteers
-    if (user.role !== 'volunteer') {
-      const clonedDbIds = Array.isArray(user.allowedDatabaseIds)
-        ? user.allowedDatabaseIds
-        : [];
+      // If this is a PARENT (non-volunteer), drop their cloned DBs and delete volunteers
+      if (user.role !== 'volunteer') {
+        const clonedDbIds = Array.isArray(user.allowedDatabaseIds)
+          ? user.allowedDatabaseIds
+          : [];
 
-      // Delete volunteers first
-      await User.deleteMany({ parentUserId: user._id });
+        // Delete volunteers first
+        await User.deleteMany({ parentUserId: user._id });
 
-      // Drop per-user voter collections
-      for (const col of clonedDbIds) {
-        if (!col) continue;
-        try {
-          await dropVoterCollection(col);
-        } catch (err) {
-          console.error('DROP_USER_DB_ERROR', col, err.message);
+        // Drop per-user voter collections
+        for (const col of clonedDbIds) {
+          if (!col) continue;
+          try {
+            await dropVoterCollection(col);
+          } catch (err) {
+            console.error(
+              'DROP_USER_DB_ERROR',
+              col,
+              err.message
+            );
+          }
         }
       }
+
+      await User.findByIdAndDelete(user._id);
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('ADMIN_DELETE_USER_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
     }
-
-    await User.findByIdAndDelete(user._id);
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('ADMIN_DELETE_USER_ERROR', e);
-    res.status(500).json({ error: 'Server error' });
   }
-});
+);
 
 /** Update role */
-router.patch('/users/:id/role', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { role } = req.body || {};
-    const normalizedRole =
-      typeof role === 'string' ? role.trim().toLowerCase() : '';
-    const allowedRoles = ['admin', 'operator', 'candidate', 'user', 'volunteer'];
-    if (!allowedRoles.includes(normalizedRole)) {
-      return res.status(400).json({ error: 'Invalid role' });
-    }
-
-    if (
-      String(req.user?.id) === String(id) &&
-      req.user.role !== normalizedRole
-    ) {
-      return res
-        .status(400)
-        .json({ error: 'You cannot change your own role' });
-    }
-
-    const user = await User.findByIdAndUpdate(
-      id,
-      { role: normalizedRole },
-      {
-        new: true,
-        projection:
-          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
+router.patch(
+  '/users/:id/role',
+  auth,
+  requireRole('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { role } = req.body || {};
+      const normalizedRole =
+        typeof role === 'string' ? role.trim().toLowerCase() : '';
+      const allowedRoles = [
+        'admin',
+        'operator',
+        'candidate',
+        'user',
+        'volunteer',
+      ];
+      if (!allowedRoles.includes(normalizedRole)) {
+        return res.status(400).json({ error: 'Invalid role' });
       }
-    );
-    if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // recompute volunteerCount for this user
-    const used = await User.countDocuments({ parentUserId: user._id });
+      if (
+        String(req.user?.id) === String(id) &&
+        req.user.role !== normalizedRole
+      ) {
+        return res.status(400).json({
+          error: 'You cannot change your own role',
+        });
+      }
 
-    res.json({
-      user: serializeUser(user, { volunteerCount: used }),
-    });
-  } catch (e) {
-    console.error('ADMIN_UPDATE_ROLE_ERROR', e);
-    res.status(500).json({ error: 'Server error' });
+      const user = await User.findByIdAndUpdate(
+        id,
+        { role: normalizedRole },
+        {
+          new: true,
+          projection:
+            'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
+        }
+      );
+      if (!user)
+        return res.status(404).json({ error: 'User not found' });
+
+      // recompute volunteerCount for this user
+      const used = await User.countDocuments({
+        parentUserId: user._id,
+      });
+
+      res.json({
+        user: serializeUser(user, { volunteerCount: used }),
+      });
+    } catch (e) {
+      console.error('ADMIN_UPDATE_ROLE_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
+    }
   }
-});
+);
 
 /** Update password */
-router.patch('/users/:id/password', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { password = '' } = req.body || {};
-    if (!password || typeof password !== 'string' || password.length < 4) {
-      return res
-        .status(400)
-        .json({ error: 'Password must be at least 4 characters long.' });
-    }
-    const passwordHash = await bcrypt.hash(password, 10);
-    const user = await User.findByIdAndUpdate(
-      id,
-      { passwordHash },
-      {
-        new: true,
-        projection:
-          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
+router.patch(
+  '/users/:id/password',
+  auth,
+  requireRole('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { password = '' } = req.body || {};
+      if (!password || typeof password !== 'string' || password.length < 4) {
+        return res.status(400).json({
+          error: 'Password must be at least 4 characters long.',
+        });
       }
-    );
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('ADMIN_UPDATE_PASSWORD_ERROR', e);
-    res.status(500).json({ error: 'Server error' });
+      const passwordHash = await bcrypt.hash(password, 10);
+      const user = await User.findByIdAndUpdate(
+        id,
+        { passwordHash },
+        {
+          new: true,
+          projection:
+            'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
+        }
+      );
+      if (!user)
+        return res.status(404).json({ error: 'User not found' });
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('ADMIN_UPDATE_PASSWORD_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
+    }
   }
-});
+);
 
 /** Update allowed DB access (for existing per-user DBs – no cloning here) */
-router.patch('/users/:id/databases', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    let { allowedDatabaseIds = [] } = req.body || {};
-    if (!Array.isArray(allowedDatabaseIds)) allowedDatabaseIds = [];
-
-    // Best-effort validation: any existing collection is allowed
+router.patch(
+  '/users/:id/databases',
+  auth,
+  requireRole('admin'),
+  async (req, res) => {
     try {
-      const available = await listVoterDatabases();
-      const validIds = new Set(available.map((db) => db.id));
-      allowedDatabaseIds = allowedDatabaseIds
-        .map((v) => (typeof v === 'string' ? v.trim() : ''))
-        .filter((v) => v && validIds.has(v));
-    } catch {
-      // keep as-is on failure
-    }
+      const { id } = req.params;
+      let { allowedDatabaseIds = [] } = req.body || {};
+      if (!Array.isArray(allowedDatabaseIds)) allowedDatabaseIds = [];
 
-    const user = await User.findByIdAndUpdate(
-      id,
-      { allowedDatabaseIds },
-      {
-        new: true,
-        projection:
-          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
+      // Best-effort validation: any existing collection is allowed
+      try {
+        const available = await listVoterDatabases();
+        const validIds = new Set(available.map((db) => db.id));
+        allowedDatabaseIds = allowedDatabaseIds
+          .map((v) => (typeof v === 'string' ? v.trim() : ''))
+          .filter((v) => v && validIds.has(v));
+      } catch {
+        // keep as-is on failure
       }
-    );
-    if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const used = await User.countDocuments({ parentUserId: user._id });
+      const user = await User.findByIdAndUpdate(
+        id,
+        { allowedDatabaseIds },
+        {
+          new: true,
+          projection:
+            'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
+        }
+      );
+      if (!user)
+        return res.status(404).json({ error: 'User not found' });
 
-    res.json({
-      user: serializeUser(user, { volunteerCount: used }),
-    });
-  } catch (e) {
-    console.error('ADMIN_UPDATE_DATABASES_ERROR', e);
-    res.status(500).json({ error: 'Server error' });
+      const used = await User.countDocuments({
+        parentUserId: user._id,
+      });
+
+      res.json({
+        user: serializeUser(user, { volunteerCount: used }),
+      });
+    } catch (e) {
+      console.error('ADMIN_UPDATE_DATABASES_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
+    }
   }
-});
+);
 
 /** Combined PUT (role + DBs in one call) */
 router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
@@ -488,9 +552,12 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
           'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
       }
     );
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user)
+      return res.status(404).json({ error: 'User not found' });
 
-    const used = await User.countDocuments({ parentUserId: user._id });
+    const used = await User.countDocuments({
+      parentUserId: user._id,
+    });
 
     const serialized = serializeUser(user, {
       volunteerCount: used,
@@ -508,75 +575,143 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
 });
 
 /** Reset device binding for a user (used by AdminUsers.jsx) */
-router.patch('/users/:id/reset-device', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const user = await User.findById(id);
-    if (!user) return res.status(404).json({ error: 'User not found' });
+router.patch(
+  '/users/:id/reset-device',
+  auth,
+  requireRole('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = await User.findById(id);
+      if (!user)
+        return res.status(404).json({ error: 'User not found' });
 
-    if (Array.isArray(user.deviceHistory)) {
-      user.deviceHistory.push({
-        action: 'RESET',
-        by: req.user?.id || 'admin',
+      if (Array.isArray(user.deviceHistory)) {
+        user.deviceHistory.push({
+          action: 'RESET',
+          by: req.user?.id || 'admin',
+        });
+      } else {
+        user.deviceHistory = [
+          { action: 'RESET', by: req.user?.id || 'admin' },
+        ];
+      }
+
+      user.deviceIdBound = null;
+      user.deviceBoundAt = null;
+      await user.save();
+
+      const used = await User.countDocuments({
+        parentUserId: user._id,
       });
-    } else {
-      user.deviceHistory = [
-        { action: 'RESET', by: req.user?.id || 'admin' },
-      ];
+
+      res.json({
+        user: serializeUser(user, { volunteerCount: used }),
+      });
+    } catch (e) {
+      console.error('ADMIN_RESET_DEVICE_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
     }
-
-    user.deviceIdBound = null;
-    user.deviceBoundAt = null;
-    await user.save();
-
-    const used = await User.countDocuments({ parentUserId: user._id });
-
-    res.json({
-      user: serializeUser(user, { volunteerCount: used }),
-    });
-  } catch (e) {
-    console.error('ADMIN_RESET_DEVICE_ERROR', e);
-    res.status(500).json({ error: 'Server error' });
   }
-});
+);
 
 /** Enable / disable a user (and all their volunteers) */
-router.patch('/users/:id/enabled', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { enabled } = req.body || {};
-    const flag = !!enabled;
+router.patch(
+  '/users/:id/enabled',
+  auth,
+  requireRole('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { enabled } = req.body || {};
+      const flag = !!enabled;
 
-    // Prevent disabling your own admin account (optional safeguard)
-    if (String(req.user?.id) === String(id) && !flag) {
-      return res
-        .status(400)
-        .json({ error: 'You cannot disable your own account' });
+      // Prevent disabling your own admin account (optional safeguard)
+      if (String(req.user?.id) === String(id) && !flag) {
+        return res.status(400).json({
+          error: 'You cannot disable your own account',
+        });
+      }
+
+      const user = await User.findById(id);
+      if (!user)
+        return res.status(404).json({ error: 'User not found' });
+
+      user.enabled = flag;
+      await user.save();
+
+      // If this is a parent, propagate enabled flag to its volunteers
+      if (user.role !== 'volunteer') {
+        await User.updateMany(
+          { parentUserId: user._id },
+          { $set: { enabled: flag } }
+        );
+      }
+
+      const used = await User.countDocuments({
+        parentUserId: user._id,
+      });
+
+      res.json({
+        user: serializeUser(user, { volunteerCount: used }),
+      });
+    } catch (e) {
+      console.error('ADMIN_ENABLE_USER_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
     }
-
-    const user = await User.findById(id);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    user.enabled = flag;
-    await user.save();
-
-    // If this is a parent, propagate enabled flag to its volunteers
-    if (user.role !== 'volunteer') {
-      await User.updateMany(
-        { parentUserId: user._id },
-        { $set: { enabled: flag } }
-      );
-    }
-
-    const used = await User.countDocuments({ parentUserId: user._id });
-
-    res.json({
-      user: serializeUser(user, { volunteerCount: used }),
-    });
-  } catch (e) {
-    console.error('ADMIN_ENABLE_USER_ERROR', e);
-    res.status(500).json({ error: 'Server error' });
   }
-});
+);
+
+/** Update avatar / volunteer limit (profile config) */
+router.patch(
+  '/users/:id/profile',
+  auth,
+  requireRole('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { avatarUrl, maxVolunteers } = req.body || {};
+
+      const user = await User.findById(id);
+      if (!user)
+        return res.status(404).json({ error: 'User not found' });
+
+      // avatar update
+      if (typeof avatarUrl === 'string') {
+        user.avatarUrl = avatarUrl || null;
+      }
+
+      // volunteer limit update (only for non-volunteer parent accounts)
+      if (maxVolunteers !== undefined && user.role !== 'volunteer') {
+        const n = Number(maxVolunteers);
+        if (!Number.isNaN(n) && n >= 0) {
+          const safeLimit = Math.min(n, 50);
+          const used = await User.countDocuments({
+            parentUserId: user._id,
+          });
+          if (safeLimit < used) {
+            return res.status(400).json({
+              error: `Cannot set volunteers limit below currently used count (${used}).`,
+            });
+          }
+          user.maxVolunteers = safeLimit;
+        }
+      }
+
+      await user.save();
+
+      const used = await User.countDocuments({
+        parentUserId: user._id,
+      });
+
+      res.json({
+        user: serializeUser(user, { volunteerCount: used }),
+      });
+    } catch (e) {
+      console.error('ADMIN_UPDATE_PROFILE_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
 
 export default router;
