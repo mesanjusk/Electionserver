@@ -10,6 +10,12 @@ const BaseVoterSchema = new mongoose.Schema(
     booth: String,
     part: String,
     serial: String,
+
+    // 🔹 NEW voter tags
+    caste: String,               // "OPEN", "OBC", "SC", "ST", etc.
+    politicalInterest: String,   // "Pro ruling", "Neutral", etc.
+    volunteer: String,           // volunteer / worker name
+
     __raw: { type: mongoose.Schema.Types.Mixed },
   },
   {
@@ -125,7 +131,10 @@ export async function listVoterDatabases() {
  * Clone a voter collection into a new collection (one-time copy).
  * Used when creating per-user private DBs.
  */
-export async function cloneVoterCollection(sourceCollectionName, targetCollectionName) {
+export async function cloneVoterCollection(
+  sourceCollectionName,
+  targetCollectionName
+) {
   const connection = mongoose.connection;
   if (!connection) throw new Error('MongoDB connection is not ready');
 

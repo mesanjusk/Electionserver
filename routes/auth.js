@@ -3,18 +3,8 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import { listVoterDatabases } from '../models/Voter.js';
 import { getDeviceIdFromHeaders } from '../lib/deviceId.js';
-
-/**
- * Optional helper to list voter DBs with labels.
- * If you already have something like this elsewhere, import that instead.
- * Must return: [{ id: 'collection_name', name: 'Readable Label' }, ...]
- */
-async function listVoterDatabases() {
-  // Minimal fallback: if you don't have a DB registry, just map allowed ids to labels
-  // Replace with your real registry if available.
-  return []; // <- If you have a registry, return it here.
-}
 
 const router = Router();
 
