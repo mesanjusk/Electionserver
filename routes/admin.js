@@ -41,6 +41,10 @@ function serializeUser(user, overrides = {}) {
     enabled:
       typeof plain.enabled === 'boolean' ? plain.enabled : true,
 
+    // 🔹 Political party info
+    partyId: plain.partyId || null,
+    partyName: plain.partyName || '',
+
     // will be overridden by list route
     volunteerCount:
       typeof plain.volunteerCount === 'number' ? plain.volunteerCount : 0,
@@ -77,7 +81,7 @@ router.get('/users', auth, requireRole('admin'), async (_req, res) => {
     // Base user docs
     const users = await User.find(
       {},
-      'username role allowedDatabaseIds createdAt updatedAt avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled'
+      'username role allowedDatabaseIds createdAt updatedAt avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled partyId partyName'
     ).sort({ createdAt: -1 });
 
     // Compute volunteer counts: how many users reference each parentUserId
@@ -116,6 +120,10 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
       maxVolunteers,
       parentUserId,
       parentUsername,
+
+      // 🔹 NEW: political party info coming from frontend
+      partyId,
+      partyName,
     } = req.body || {};
 
     const normalizedUsername =
@@ -240,6 +248,11 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
         maxVolunteers: 0,
         parentUserId: finalParentUserId,
         parentUsername: finalParentUsername,
+        enabled: true,
+
+        // store party on volunteer too (same as parent candidate)
+        partyId: partyId || null,
+        partyName: partyName || '',
       });
 
       return res.status(201).json({ user: serializeUser(user) });
@@ -257,11 +270,15 @@ router.post('/users', auth, requireRole('admin'), async (req, res) => {
       parentUserId: finalParentUserId,
       parentUsername: finalParentUsername,
       enabled: true,
+
+      // store party for main user / candidate
+      partyId: partyId || null,
+      partyName: partyName || '',
     });
 
     const clonedDbIds = [];
 
-    // 👉 use username instead of raw Mongo _id in cloned DB id
+    // use username instead of raw Mongo _id in cloned DB id
     const rawKey = user.username || user._id;
     const safeKey =
       String(rawKey)
@@ -404,7 +421,7 @@ router.patch(
         {
           new: true,
           projection:
-            'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
+            'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled partyId partyName',
         }
       );
       if (!user)
@@ -446,7 +463,7 @@ router.patch(
         {
           new: true,
           projection:
-            'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
+            'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled partyId partyName',
         }
       );
       if (!user)
@@ -487,7 +504,7 @@ router.patch(
         {
           new: true,
           projection:
-            'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
+            'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled partyId partyName',
         }
       );
       if (!user)
@@ -549,7 +566,7 @@ router.put('/users/:id', auth, requireRole('admin'), async (req, res) => {
       {
         new: true,
         projection:
-          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled',
+          'username role allowedDatabaseIds avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled partyId partyName',
       }
     );
     if (!user)

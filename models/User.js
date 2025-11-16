@@ -23,9 +23,21 @@ const UserSchema = new mongoose.Schema(
 
     email: { type: String, trim: true, lowercase: true },
 
+    // ✅ Political party fields (linked to Party master by id/code)
+    partyId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    partyName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+
     allowedDatabaseIds: { type: [String], default: [] },
 
-    // ✅ Avatar image URL (Cloudinary)
+    // ✅ Avatar image URL (Cloudinary) – poster image for candidate & volunteers
     avatarUrl: {
       type: String,
       trim: true,
