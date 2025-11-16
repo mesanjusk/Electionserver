@@ -9,6 +9,8 @@ import {
   cloneVoterCollection,
   dropVoterCollection,
 } from '../models/Voter.js';
+import Party from "../models/Party.js";   // ⬅️ add on top
+
 
 const router = Router();
 
@@ -74,6 +76,18 @@ router.get(
     }
   }
 );
+
+// GET all political parties
+router.get("/parties", async (req, res) => {
+  try {
+    const parties = await Party.find({}).lean();
+    res.json(parties);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load parties" });
+  }
+});
+
+
 
 /** List users (with volunteer counts, avatars, device info, enabled flag) */
 router.get('/users', auth, requireRole('admin'), async (_req, res) => {
