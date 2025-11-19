@@ -90,11 +90,26 @@ router.get("/parties", async (req, res) => {
 
 
 /** List users (with volunteer counts, avatars, device info, enabled flag) */
-router.get('/users', auth, requireRole('admin'), async (_req, res) => {
+/** List users (with volunteer counts, avatars, device info, enabled flag) */
+router.get('/users', auth, requireRole('admin', 'candidate'), async (req, res) => {
   try {
+    // If admin → see all users
+    // If candidate → see only self + own volunteers
+    let filter = {};
+
+    if (req.user?.role === 'candidate') {
+      const currentUserId = req.user.id || req.user._id;
+      filter = {
+        $or: [
+          { _id: currentUserId },          // the candidate himself/herself
+          { parentUserId: currentUserId }, // volunteers under this candidate
+        ],
+      };
+    }
+
     // Base user docs
     const users = await User.find(
-      {},
+      filter,
       'username role allowedDatabaseIds createdAt updatedAt avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled partyId partyName'
     ).sort({ createdAt: -1 });
 
@@ -121,6 +136,7 @@ router.get('/users', auth, requireRole('admin'), async (_req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
+
 
 /** Create user (username required; role; allowed DBs; avatar; volunteers; per-user DBs) */
 router.post('/users', auth, requireRole('admin'), async (req, res) => {
