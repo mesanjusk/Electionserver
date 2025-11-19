@@ -91,31 +91,27 @@ router.get("/parties", async (req, res) => {
 
 /** List users (with volunteer counts, avatars, device info, enabled flag) */
 /** List users (with volunteer counts, avatars, device info, enabled flag) */
+/** List users (with volunteer counts, avatars, device info, enabled flag) */
 router.get('/users', auth, requireRole('admin', 'candidate'), async (req, res) => {
   try {
-    // If admin → see all users
-    // If candidate → see only self + own volunteers
-    let filter = {};
+    const isAdmin = req.user && req.user.role === 'admin';
 
-    if (req.user?.role === 'candidate') {
-      const currentUserId = req.user.id || req.user._id;
-      filter = {
-        $or: [
-          { _id: currentUserId },          // the candidate himself/herself
-          { parentUserId: currentUserId }, // volunteers under this candidate
-        ],
-      };
-    }
+    // 🔹 Admin: see all users
+    // 🔹 Candidate: see only their own volunteers (users whose parentUserId = candidate._id)
+    const baseFilter = isAdmin
+      ? {}
+      : { parentUserId: req.user._id };
 
-    // Base user docs
-    const users = await User.find(
-      filter,
-      'username role allowedDatabaseIds createdAt updatedAt avatarUrl maxVolunteers parentUserId parentUsername deviceIdBound deviceBoundAt enabled partyId partyName'
-    ).sort({ createdAt: -1 });
+    // Base user docs (no field projection → serializeUser will shape response)
+    const users = await User.find(baseFilter).sort({ createdAt: -1 });
 
     // Compute volunteer counts: how many users reference each parentUserId
+    const matchStage = isAdmin
+      ? { parentUserId: { $ne: null } }
+      : { parentUserId: req.user._id };
+
     const volunteerCountsRaw = await User.aggregate([
-      { $match: { parentUserId: { $ne: null } } },
+      { $match: matchStage },
       { $group: { _id: '$parentUserId', count: { $sum: 1 } } },
     ]);
 
@@ -136,6 +132,7 @@ router.get('/users', auth, requireRole('admin', 'candidate'), async (req, res) =
     res.status(500).json({ error: 'Server error' });
   }
 });
+
 
 
 /** Create user (username required; role; allowed DBs; avatar; volunteers; per-user DBs) */
