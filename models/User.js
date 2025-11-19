@@ -13,6 +13,12 @@ const UserSchema = new mongoose.Schema(
 
     passwordHash: { type: String, required: true },
 
+    // ✅ NEW: store hashed PIN so backend can validate /pin-login
+    pinHash: {
+      type: String,
+      default: null,
+    },
+
     // ✅ now includes 'volunteer'
     role: {
       type: String,
