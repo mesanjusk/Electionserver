@@ -91,17 +91,18 @@ router.get("/parties", async (req, res) => {
 
 /** List users (with volunteer counts, avatars, device info, enabled flag) */
 /** List users (with volunteer counts, avatars, device info, enabled flag) */
-// List users (with volunteer counts, avatars, device info, enabled flag)
-router.get('/users', auth, requireAuth, async (req, res) => {
+/** List users (with volunteer counts, avatars, device info, enabled flag) */
+router.get('/users', auth, requireRole('admin', 'candidate'), async (req, res) => {
   try {
     const isAdmin = req.user && req.user.role === 'admin';
 
     // 🔹 Admin: see all users
-    // 🔹 Non-admin roles: see only their own users (by parentUserId)
+    // 🔹 Candidate: see only their own volunteers (users whose parentUserId = candidate._id)
     const baseFilter = isAdmin
       ? {}
       : { parentUserId: req.user._id };
 
+    // Base user docs (no field projection → serializeUser will shape response)
     const users = await User.find(baseFilter).sort({ createdAt: -1 });
 
     // Compute volunteer counts: how many users reference each parentUserId
@@ -125,13 +126,12 @@ router.get('/users', auth, requireAuth, async (req, res) => {
       })
     );
 
-    res.json(serialized);
+    res.json({ users: serialized });
   } catch (e) {
     console.error('ADMIN_LIST_USERS_ERROR', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
-
 
 
 
