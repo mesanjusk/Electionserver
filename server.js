@@ -31,7 +31,7 @@ function attachDeviceId(req, _res, next) {
 const defaultAllowedOrigins = [
   'https://election-front-beta.vercel.app',
   'http://localhost:5173',
-  'https://vote.sanjusk.in',
+  'https://vote.instify.in',
 ];
 
 // Parse comma-separated env list (e.g., CORS_ORIGIN="https://foo.app,https://bar.site")
