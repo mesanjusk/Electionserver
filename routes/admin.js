@@ -91,47 +91,30 @@ router.get("/parties", async (req, res) => {
 
 /** List users (with volunteer counts, avatars, device info, enabled flag) */
 /** List users (with volunteer counts, avatars, device info, enabled flag) */
-/** List users (with volunteer counts, avatars, device info, enabled flag) */
-router.get('/users', auth, requireRole('admin', 'candidate'), async (req, res) => {
-  try {
-    const isAdmin = req.user && req.user.role === 'admin';
+router.get(
+  '/users',
+  auth,
+  requireRole('admin', 'candidate', 'operator', 'volunteer'),
+  async (req, res) => {
+    try {
+      const isAdmin = req.user && req.user.role === 'admin';
 
-    // 🔹 Admin: see all users
-    // 🔹 Candidate: see only their own volunteers (users whose parentUserId = candidate._id)
-    const baseFilter = isAdmin
-      ? {}
-      : { parentUserId: req.user._id };
+      // 🔹 Admin: see all users
+      // 🔹 Non-admin roles (candidate / operator / volunteer): see only their own users
+      const baseFilter = isAdmin
+        ? {}
+        : { parentUserId: req.user._id };
 
-    // Base user docs (no field projection → serializeUser will shape response)
-    const users = await User.find(baseFilter).sort({ createdAt: -1 });
+      const users = await User.find(baseFilter).sort({ createdAt: -1 });
 
-    // Compute volunteer counts: how many users reference each parentUserId
-    const matchStage = isAdmin
-      ? { parentUserId: { $ne: null } }
-      : { parentUserId: req.user._id };
-
-    const volunteerCountsRaw = await User.aggregate([
-      { $match: matchStage },
-      { $group: { _id: '$parentUserId', count: { $sum: 1 } } },
-    ]);
-
-    const volunteerCountsMap = {};
-    for (const row of volunteerCountsRaw) {
-      volunteerCountsMap[String(row._id)] = row.count;
+      // ... rest of your existing code stays SAME ...
+    } catch (e) {
+      console.error('ADMIN_LIST_USERS_ERROR', e);
+      res.status(500).json({ error: 'Server error' });
     }
-
-    const serialized = users.map((u) =>
-      serializeUser(u, {
-        volunteerCount: volunteerCountsMap[String(u._id)] || 0,
-      })
-    );
-
-    res.json({ users: serialized });
-  } catch (e) {
-    console.error('ADMIN_LIST_USERS_ERROR', e);
-    res.status(500).json({ error: 'Server error' });
   }
-});
+);
+
 
 
 
