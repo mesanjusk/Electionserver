@@ -103,7 +103,7 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
-    // Device binding for candidates (first login binds)
+    // ✅ Device binding for CANDIDATES (strict: lock to first device)
     if (user.role === 'candidate') {
       if (!deviceId || typeof deviceId !== 'string' || deviceId.length < 6) {
         return res.status(400).json({
@@ -130,6 +130,32 @@ router.post('/login', async (req, res) => {
         user.deviceHistory.push({
           deviceId,
           action: 'BOUND_LOGIN',
+          by: 'system',
+        });
+      }
+    }
+
+    // ✅ Device tracking for VOLUNTEERS (lenient: track, but do NOT block login)
+    if (user.role === 'volunteer') {
+      if (deviceId && typeof deviceId === 'string' && deviceId.length >= 6) {
+        if (!Array.isArray(user.deviceHistory)) {
+          user.deviceHistory = [];
+        }
+
+        // if previously bound to a different device, log the switch but allow it
+        if (user.deviceIdBound && user.deviceIdBound !== deviceId) {
+          user.deviceHistory.push({
+            deviceId: user.deviceIdBound,
+            action: 'VOLUNTEER_DEVICE_SWITCH',
+            by: 'system',
+          });
+        }
+
+        user.deviceIdBound = deviceId;
+        user.deviceBoundAt = new Date();
+        user.deviceHistory.push({
+          deviceId,
+          action: 'VOLUNTEER_LOGIN',
           by: 'system',
         });
       }
@@ -222,7 +248,7 @@ router.post('/pin-login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid PIN' });
     }
 
-    // Enforce device binding for candidates
+    // ✅ Enforce device binding for candidates (same as before)
     if (user.role === 'candidate') {
       if (!deviceId || typeof deviceId !== 'string' || deviceId.length < 6) {
         return res.status(400).json({
@@ -249,6 +275,31 @@ router.post('/pin-login', async (req, res) => {
         user.deviceHistory.push({
           deviceId,
           action: 'BOUND_PIN_LOGIN',
+          by: 'system',
+        });
+      }
+    }
+
+    // ✅ Device tracking for VOLUNTEERS on PIN login (lenient, like normal login)
+    if (user.role === 'volunteer') {
+      if (deviceId && typeof deviceId === 'string' && deviceId.length >= 6) {
+        if (!Array.isArray(user.deviceHistory)) {
+          user.deviceHistory = [];
+        }
+
+        if (user.deviceIdBound && user.deviceIdBound !== deviceId) {
+          user.deviceHistory.push({
+            deviceId: user.deviceIdBound,
+            action: 'VOLUNTEER_DEVICE_SWITCH_PIN',
+            by: 'system',
+          });
+        }
+
+        user.deviceIdBound = deviceId;
+        user.deviceBoundAt = new Date();
+        user.deviceHistory.push({
+          deviceId,
+          action: 'VOLUNTEER_PIN_LOGIN',
           by: 'system',
         });
       }
