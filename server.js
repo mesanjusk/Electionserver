@@ -19,7 +19,7 @@ const app = express();
 /* ------------------------- Trust proxy (Render/Heroku) ------------------------- */
 app.set('trust proxy', 1);
 
-/* ---------------------- Device ID extractor (global) --------------------- */
+/* ---------------------- Device ID extractor (global) ------------------ */
 /** Reads device ID from header or body and puts it on req.deviceId */
 function attachDeviceId(req, _res, next) {
   req.deviceId = resolveRequestDeviceId(req, req.body?.deviceId);
