@@ -16,7 +16,7 @@ dotenv.config();
 
 const app = express();
 
-/* ------------------------- Trust proxy (Render/Heroku) ------------------------- */
+/* ------------------------- Trust proxy (Render/Heroku) --------------------- */
 app.set('trust proxy', 1);
 
 /* ---------------------- Device ID extractor (global) ------------------ */
